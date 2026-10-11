@@ -4,7 +4,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
     Button,
-    Card,
     Dropdown,
     Flex,
     FormField,
@@ -18,6 +17,7 @@ import type { CloudProviderConfig, CloudProvidersSettings } from '@/shared/types
 import type { ClusterNode } from '@/shared/types/cluster'
 import getErrorString from '@/shared/utils/get-error-string'
 import { InlineErrorBanner } from '@/ui/components/InlineErrorBanner'
+import { ExpandMore } from '@/ui/components/icons'
 
 const EMPTY_SETTINGS: CloudProvidersSettings = {
     schema_version: 1,
@@ -56,6 +56,7 @@ export default function CloudProvidersSettingsCard() {
     const [credential, setCredential] = useState('')
     const [busy, setBusy] = useState(false)
     const [testing, setTesting] = useState(false)
+    const [connectionResults, setConnectionResults] = useState<Record<string, boolean>>({})
     const [error, setError] = useState<string | null>(null)
     const [status, setStatus] = useState<string | null>(null)
     const [members, setMembers] = useState<ClusterNode[]>([])
@@ -64,6 +65,7 @@ export default function CloudProvidersSettingsCard() {
     const applySettings = useCallback(
         (next: CloudProvidersSettings, preferredProviderId?: string) => {
             setSettings(next)
+            setConnectionResults({})
             const provider =
                 next.config.providers.find(entry => entry.id === preferredProviderId) ??
                 next.config.providers[0]
@@ -291,6 +293,7 @@ export default function CloudProvidersSettingsCard() {
         setStatus(null)
         try {
             const result = await window.pairApi.cloudProviders.testConnection(providerId.trim())
+            setConnectionResults(current => ({ ...current, [providerId.trim()]: result.connected }))
             setStatus(
                 result.connected ? 'Provider connection succeeded.' : 'Provider connection failed.'
             )
@@ -371,249 +374,307 @@ export default function CloudProvidersSettingsCard() {
     const pairedMembers = members.filter(
         member => member.state === 'member' && member.nodeUuid !== selfNodeUuid
     )
+    const configuredProviders = settings.config.providers
+    const enabledProviders = configuredProviders.filter(provider => provider.enabled).length
 
     return (
-        <Card density="compact" className="settings-card pair-paper p-4">
-            <Stack gap="4">
-                <Flex align="center" justify="between" gap="4" wrap="wrap">
-                    <Stack gap="1">
-                        <Text kind="body/semibold/md">Cloud providers</Text>
-                        <Text kind="body/regular/sm" className="text-subtle-color">
-                            Cloud routing is off by default. Saving settings does not contact a
-                            provider.
-                        </Text>
+        <details className="pair-paper w-full p-4 cloud-providers-card">
+            <summary className="pair-accordion-summary cloud-providers-card-summary">
+                <Flex align="center" gap="2">
+                    <ExpandMore className="cloud-providers-card-chevron" style={{ fontSize: 14 }} />
+                    <Text kind="body/semibold/md">Cloud providers</Text>
+                </Flex>
+                <Flex align="center" gap="3" wrap="wrap">
+                    <Text kind="body/regular/sm" className="text-subtle-color">
+                        {configuredProviders.length} configured · {enabledProviders} enabled ·{' '}
+                        {settings.cloudEnabled ? 'routing enabled' : 'routing disabled'}
+                    </Text>
+                </Flex>
+            </summary>
+            <Stack gap="4" className="pt-4">
+                <Text kind="body/regular/sm" className="text-subtle-color">
+                    Cloud routing is off by default. Saving settings does not contact a provider.
+                </Text>
+                {configuredProviders.length > 0 && (
+                    <Stack gap="2" aria-label="Configured cloud providers">
+                        {configuredProviders.map(provider => {
+                            const connectionResult = connectionResults[provider.id]
+                            const modelCount = provider.models.length
+                            return (
+                                <Flex
+                                    key={provider.id}
+                                    align="center"
+                                    justify="between"
+                                    gap="3"
+                                    wrap="wrap"
+                                >
+                                    <Text kind="body/semibold/sm">{provider.id}</Text>
+                                    <Text kind="body/regular/sm" className="text-subtle-color">
+                                        {provider.enabled ? 'Enabled' : 'Disabled'} · {modelCount}{' '}
+                                        {modelCount === 1 ? 'model' : 'models'} ·{' '}
+                                        {connectionResult === undefined
+                                            ? 'Not tested this session'
+                                            : connectionResult
+                                              ? 'Connection test succeeded'
+                                              : 'Connection test failed'}
+                                    </Text>
+                                </Flex>
+                            )
+                        })}
                     </Stack>
-                    <Switch
-                        size="small"
-                        checked={settings.cloudEnabled}
-                        onCheckedChange={cloudEnabled => {
-                            if (
-                                cloudEnabled &&
-                                !window.confirm(
-                                    'Cloud requests can incur provider charges. Enable cloud routing?'
+                )}
+                <Stack gap="4">
+                    <Flex align="center" justify="between" gap="4" wrap="wrap">
+                        <Stack gap="1">
+                            <Text kind="body/semibold/md">Cloud routing</Text>
+                            <Text kind="body/regular/sm" className="text-subtle-color">
+                                Cloud routing is off by default. Saving settings does not contact a
+                                provider.
+                            </Text>
+                        </Stack>
+                        <Switch
+                            size="small"
+                            checked={settings.cloudEnabled}
+                            onCheckedChange={cloudEnabled => {
+                                if (
+                                    cloudEnabled &&
+                                    !window.confirm(
+                                        'Cloud requests can incur provider charges. Enable cloud routing?'
+                                    )
                                 )
-                            )
-                                return
-                            setSettings(current => ({ ...current, cloudEnabled }))
-                        }}
-                        aria-label="Enable cloud routing"
-                    />
-                </Flex>
+                                    return
+                                setSettings(current => ({ ...current, cloudEnabled }))
+                            }}
+                            aria-label="Enable cloud routing"
+                        />
+                    </Flex>
 
-                <Stack gap="2">
-                    <Text kind="body/semibold/sm">Paired node Cloud access</Text>
-                    <Text kind="body/regular/sm" className="text-subtle-color">
-                        Pairing does not grant access to this host&apos;s paid Cloud account.
-                        Authorize each node separately.
-                    </Text>
-                    {pairedMembers.map(member => (
-                        <Flex key={member.nodeUuid} align="center" justify="between" gap="3">
-                            <Text kind="body/regular/sm">{member.name}</Text>
-                            <Switch
-                                size="small"
-                                checked={settings.authorizedNodes.some(
-                                    entry =>
-                                        entry.nodeUuid === member.nodeUuid &&
-                                        entry.certFingerprint === member.certFingerprint
-                                )}
-                                disabled={busy || !member.certFingerprint}
-                                onCheckedChange={authorized =>
-                                    void setNodeAuthorization(member, authorized)
-                                }
-                                aria-label={`Allow ${member.name} to use paid Cloud providers`}
-                            />
-                        </Flex>
-                    ))}
-                    {pairedMembers.length === 0 && (
+                    <Stack gap="2">
+                        <Text kind="body/semibold/sm">Paired node Cloud access</Text>
                         <Text kind="body/regular/sm" className="text-subtle-color">
-                            No paired nodes are available.
+                            Pairing does not grant access to this host&apos;s paid Cloud account.
+                            Authorize each node separately.
                         </Text>
-                    )}
+                        {pairedMembers.map(member => (
+                            <Flex key={member.nodeUuid} align="center" justify="between" gap="3">
+                                <Text kind="body/regular/sm">{member.name}</Text>
+                                <Switch
+                                    size="small"
+                                    checked={settings.authorizedNodes.some(
+                                        entry =>
+                                            entry.nodeUuid === member.nodeUuid &&
+                                            entry.certFingerprint === member.certFingerprint
+                                    )}
+                                    disabled={busy || !member.certFingerprint}
+                                    onCheckedChange={authorized =>
+                                        void setNodeAuthorization(member, authorized)
+                                    }
+                                    aria-label={`Allow ${member.name} to use paid Cloud providers`}
+                                />
+                            </Flex>
+                        ))}
+                        {pairedMembers.length === 0 && (
+                            <Text kind="body/regular/sm" className="text-subtle-color">
+                                No paired nodes are available.
+                            </Text>
+                        )}
+                    </Stack>
+
+                    <Flex align="center" justify="between" gap="4" wrap="wrap">
+                        <Text kind="body/regular/sm">Provider enabled</Text>
+                        <Switch
+                            size="small"
+                            checked={providerEnabled}
+                            onCheckedChange={setProviderEnabled}
+                            aria-label="Enable this cloud provider"
+                        />
+                    </Flex>
+                    <Flex align="center" justify="between" gap="4" wrap="wrap">
+                        <Text kind="body/regular/sm">
+                            Allow paid cloud fallback when preferring local
+                        </Text>
+                        <Switch
+                            size="small"
+                            checked={settings.allowPaidFallback}
+                            onCheckedChange={allowPaidFallback => {
+                                if (
+                                    allowPaidFallback &&
+                                    !window.confirm(
+                                        'A fallback request may incur provider charges. Allow paid fallback?'
+                                    )
+                                )
+                                    return
+                                setSettings(current => ({ ...current, allowPaidFallback }))
+                            }}
+                            aria-label="Allow paid cloud fallback"
+                        />
+                    </Flex>
+
+                    {error && <InlineErrorBanner severity="error" message={error} />}
+                    {status && <Text kind="body/regular/sm">{status}</Text>}
+
+                    <Flex wrap="wrap" gap="4">
+                        <FormField slotLabel="Configured provider">
+                            <Dropdown
+                                items={providerItems}
+                                size="small"
+                                aria-label="Select configured provider"
+                                disabled={providerItems.length === 0}
+                            >
+                                {editingProviderRefId || 'No providers configured'}
+                            </Dropdown>
+                        </FormField>
+                        <Flex align="end" gap="2">
+                            <Button
+                                kind="secondary"
+                                size="small"
+                                onClick={addProvider}
+                                disabled={busy}
+                            >
+                                Add provider
+                            </Button>
+                            <Button
+                                kind="secondary"
+                                size="small"
+                                onClick={() => void removeProvider()}
+                                disabled={busy || !editingProviderRefId}
+                            >
+                                Remove provider
+                            </Button>
+                        </Flex>
+                        <FormField slotLabel="Provider type">
+                            <Dropdown
+                                items={providerKindItems}
+                                size="small"
+                                aria-label="Select provider type"
+                            >
+                                {providerKind === 'deepseek'
+                                    ? 'DeepSeek preset'
+                                    : 'Generic OpenAI compatible'}
+                            </Dropdown>
+                        </FormField>
+                        <FormField slotLabel="Provider ID">
+                            <TextInput
+                                size="small"
+                                value={providerId}
+                                onValueChange={setProviderId}
+                            />
+                        </FormField>
+                        <FormField slotLabel="API base URL">
+                            <TextInput size="small" value={baseUrl} onValueChange={setBaseUrl} />
+                        </FormField>
+                        <FormField slotLabel="Provider model IDs (comma separated)">
+                            <TextInput
+                                size="small"
+                                value={upstreamModel}
+                                onValueChange={setUpstreamModel}
+                            />
+                        </FormField>
+                        <FormField slotLabel="PAIR model names (comma separated)">
+                            <TextInput
+                                size="small"
+                                value={publicModelName}
+                                onValueChange={setPublicModelName}
+                            />
+                        </FormField>
+                        <FormField slotLabel="Supported capabilities (comma separated)">
+                            <TextInput
+                                size="small"
+                                value={capabilitiesText}
+                                onValueChange={setCapabilitiesText}
+                                placeholder="chat, streaming, tools, json_object, json_schema, vision"
+                            />
+                        </FormField>
+                        <FormField slotLabel="Provider API key">
+                            <TextInput
+                                size="small"
+                                type="password"
+                                value={credential}
+                                onValueChange={setCredential}
+                                autoComplete="new-password"
+                                placeholder="Leave blank to keep the saved key"
+                            />
+                        </FormField>
+                        <FormField slotLabel="Routing policy">
+                            <Dropdown
+                                items={policyItems}
+                                size="small"
+                                aria-label="Select cloud routing policy"
+                            >
+                                {POLICY_LABELS[settings.policy]}
+                            </Dropdown>
+                        </FormField>
+                        <FormField slotLabel="Monthly budget (USD)">
+                            <TextInput
+                                size="small"
+                                inputMode="decimal"
+                                value={String(settings.monthlyBudgetUSD)}
+                                onValueChange={value =>
+                                    setSettings(current => ({
+                                        ...current,
+                                        monthlyBudgetUSD: Number(value) || 0
+                                    }))
+                                }
+                            />
+                        </FormField>
+                        <FormField slotLabel="Per-request maximum (USD)">
+                            <TextInput
+                                size="small"
+                                inputMode="decimal"
+                                value={String(settings.perRequestMaxEstimatedCostUSD)}
+                                onValueChange={value =>
+                                    setSettings(current => ({
+                                        ...current,
+                                        perRequestMaxEstimatedCostUSD: Number(value) || 0
+                                    }))
+                                }
+                            />
+                        </FormField>
+                    </Flex>
+
+                    <Flex align="center" justify="between" gap="3" wrap="wrap">
+                        <Text kind="body/regular/sm" className="text-subtle-color">
+                            Public model:{' '}
+                            {providerId
+                                ? `cloud/${providerId}/${publicModelName}`
+                                : 'not configured'}
+                        </Text>
+                        <Flex gap="2">
+                            <Button
+                                kind="secondary"
+                                size="small"
+                                onClick={() => void testConnection()}
+                                disabled={
+                                    busy ||
+                                    testing ||
+                                    !settings.config.providers.some(
+                                        provider => provider.id === providerId.trim()
+                                    )
+                                }
+                            >
+                                {testing ? 'Testing…' : 'Test connection'}
+                            </Button>
+                            <Button
+                                kind="secondary"
+                                size="small"
+                                onClick={() => void reload()}
+                                disabled={busy}
+                            >
+                                Reload
+                            </Button>
+                            <Button
+                                kind="primary"
+                                color="brand"
+                                size="small"
+                                onClick={() => void save()}
+                                disabled={busy}
+                            >
+                                Save provider settings
+                            </Button>
+                        </Flex>
+                    </Flex>
                 </Stack>
-
-                <Flex align="center" justify="between" gap="4" wrap="wrap">
-                    <Text kind="body/regular/sm">Provider enabled</Text>
-                    <Switch
-                        size="small"
-                        checked={providerEnabled}
-                        onCheckedChange={setProviderEnabled}
-                        aria-label="Enable this cloud provider"
-                    />
-                </Flex>
-                <Flex align="center" justify="between" gap="4" wrap="wrap">
-                    <Text kind="body/regular/sm">
-                        Allow paid cloud fallback when preferring local
-                    </Text>
-                    <Switch
-                        size="small"
-                        checked={settings.allowPaidFallback}
-                        onCheckedChange={allowPaidFallback => {
-                            if (
-                                allowPaidFallback &&
-                                !window.confirm(
-                                    'A fallback request may incur provider charges. Allow paid fallback?'
-                                )
-                            )
-                                return
-                            setSettings(current => ({ ...current, allowPaidFallback }))
-                        }}
-                        aria-label="Allow paid cloud fallback"
-                    />
-                </Flex>
-
-                {error && <InlineErrorBanner severity="error" message={error} />}
-                {status && <Text kind="body/regular/sm">{status}</Text>}
-
-                <Flex wrap="wrap" gap="4">
-                    <FormField slotLabel="Configured provider">
-                        <Dropdown
-                            items={providerItems}
-                            size="small"
-                            aria-label="Select configured provider"
-                            disabled={providerItems.length === 0}
-                        >
-                            {editingProviderRefId || 'No providers configured'}
-                        </Dropdown>
-                    </FormField>
-                    <Flex align="end" gap="2">
-                        <Button kind="secondary" size="small" onClick={addProvider} disabled={busy}>
-                            Add provider
-                        </Button>
-                        <Button
-                            kind="secondary"
-                            size="small"
-                            onClick={() => void removeProvider()}
-                            disabled={busy || !editingProviderRefId}
-                        >
-                            Remove provider
-                        </Button>
-                    </Flex>
-                    <FormField slotLabel="Provider type">
-                        <Dropdown
-                            items={providerKindItems}
-                            size="small"
-                            aria-label="Select provider type"
-                        >
-                            {providerKind === 'deepseek'
-                                ? 'DeepSeek preset'
-                                : 'Generic OpenAI compatible'}
-                        </Dropdown>
-                    </FormField>
-                    <FormField slotLabel="Provider ID">
-                        <TextInput size="small" value={providerId} onValueChange={setProviderId} />
-                    </FormField>
-                    <FormField slotLabel="API base URL">
-                        <TextInput size="small" value={baseUrl} onValueChange={setBaseUrl} />
-                    </FormField>
-                    <FormField slotLabel="Provider model IDs (comma separated)">
-                        <TextInput
-                            size="small"
-                            value={upstreamModel}
-                            onValueChange={setUpstreamModel}
-                        />
-                    </FormField>
-                    <FormField slotLabel="PAIR model names (comma separated)">
-                        <TextInput
-                            size="small"
-                            value={publicModelName}
-                            onValueChange={setPublicModelName}
-                        />
-                    </FormField>
-                    <FormField slotLabel="Supported capabilities (comma separated)">
-                        <TextInput
-                            size="small"
-                            value={capabilitiesText}
-                            onValueChange={setCapabilitiesText}
-                            placeholder="chat, streaming, tools, json_object, json_schema, vision"
-                        />
-                    </FormField>
-                    <FormField slotLabel="Provider API key">
-                        <TextInput
-                            size="small"
-                            type="password"
-                            value={credential}
-                            onValueChange={setCredential}
-                            autoComplete="new-password"
-                            placeholder="Leave blank to keep the saved key"
-                        />
-                    </FormField>
-                    <FormField slotLabel="Routing policy">
-                        <Dropdown
-                            items={policyItems}
-                            size="small"
-                            aria-label="Select cloud routing policy"
-                        >
-                            {POLICY_LABELS[settings.policy]}
-                        </Dropdown>
-                    </FormField>
-                    <FormField slotLabel="Monthly budget (USD)">
-                        <TextInput
-                            size="small"
-                            inputMode="decimal"
-                            value={String(settings.monthlyBudgetUSD)}
-                            onValueChange={value =>
-                                setSettings(current => ({
-                                    ...current,
-                                    monthlyBudgetUSD: Number(value) || 0
-                                }))
-                            }
-                        />
-                    </FormField>
-                    <FormField slotLabel="Per-request maximum (USD)">
-                        <TextInput
-                            size="small"
-                            inputMode="decimal"
-                            value={String(settings.perRequestMaxEstimatedCostUSD)}
-                            onValueChange={value =>
-                                setSettings(current => ({
-                                    ...current,
-                                    perRequestMaxEstimatedCostUSD: Number(value) || 0
-                                }))
-                            }
-                        />
-                    </FormField>
-                </Flex>
-
-                <Flex align="center" justify="between" gap="3" wrap="wrap">
-                    <Text kind="body/regular/sm" className="text-subtle-color">
-                        Public model:{' '}
-                        {providerId ? `cloud/${providerId}/${publicModelName}` : 'not configured'}
-                    </Text>
-                    <Flex gap="2">
-                        <Button
-                            kind="secondary"
-                            size="small"
-                            onClick={() => void testConnection()}
-                            disabled={
-                                busy ||
-                                testing ||
-                                !settings.config.providers.some(
-                                    provider => provider.id === providerId.trim()
-                                )
-                            }
-                        >
-                            {testing ? 'Testing…' : 'Test connection'}
-                        </Button>
-                        <Button
-                            kind="secondary"
-                            size="small"
-                            onClick={() => void reload()}
-                            disabled={busy}
-                        >
-                            Reload
-                        </Button>
-                        <Button
-                            kind="primary"
-                            color="brand"
-                            size="small"
-                            onClick={() => void save()}
-                            disabled={busy}
-                        >
-                            Save provider settings
-                        </Button>
-                    </Flex>
-                </Flex>
             </Stack>
-        </Card>
+        </details>
     )
 }

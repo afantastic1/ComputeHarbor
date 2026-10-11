@@ -68,6 +68,21 @@ function WorkloadItemCard({ workload }: { workload: Workload }) {
         return state.nodes.get(workload.requesterId)?.name ?? workload.requesterId
     })
     const barColor = useMemo(() => getWorkloadColorBar(workload.state), [workload.state])
+    const displayModel =
+        workload.kind === 'cloud'
+            ? (workload.publicModelId ?? workload.model)
+            : formatModelDisplayName(workload.model, workload.engine)
+    const estimatedCost =
+        workload.kind === 'cloud' &&
+        workload.costEstimate !== undefined &&
+        Number.isFinite(workload.costEstimate) &&
+        workload.costEstimate >= 0
+            ? new Intl.NumberFormat(undefined, {
+                  style: 'currency',
+                  currency: 'USD',
+                  maximumFractionDigits: 6
+              }).format(workload.costEstimate)
+            : null
 
     const subtext = useMemo(() => {
         const state = workload.state
@@ -141,10 +156,17 @@ function WorkloadItemCard({ workload }: { workload: Workload }) {
             <div className="workload-badge hidden" style={{ backgroundColor: barColor }}></div>
             <Stack gap="0" className="min-w-0">
                 <Flex align="center" gap="2" className="min-w-0">
-                    {workload.engine && <EngineIcon type={workload.engine} size={16} />}
+                    {workload.engine && workload.engine !== 'mnn' && (
+                        <EngineIcon type={workload.engine} size={16} />
+                    )}
                     <Text kind="body/bold/sm" className="min-w-0 truncate">
-                        {formatModelDisplayName(workload.model, workload.engine)}
+                        {displayModel}
                     </Text>
+                    {workload.engine === 'mnn' && (
+                        <Text kind="body/regular/sm" className="text-subtle-color">
+                            MNN engine
+                        </Text>
+                    )}
                 </Flex>
                 {workload.kind === 'cloud' && workload.providerId && (
                     <Text kind="body/regular/sm" className="text-subtle-color">
@@ -185,6 +207,16 @@ function WorkloadItemCard({ workload }: { workload: Workload }) {
                             {requesterNodeText}
                         </Text>
                     </Flex>
+                )}
+                {workload.kind === 'cloud' && workload.usage && (
+                    <Text kind="body/regular/sm" className="text-subtle-color">
+                        {`Usage · ${workload.usage.inputTokens.toLocaleString()} input · ${workload.usage.outputTokens.toLocaleString()} output tokens`}
+                    </Text>
+                )}
+                {estimatedCost !== null && (
+                    <Text kind="body/regular/sm" className="text-subtle-color">
+                        {`Estimated cost · ${estimatedCost}`}
+                    </Text>
                 )}
                 <Flex align="center" gap="2">
                     {subtext}

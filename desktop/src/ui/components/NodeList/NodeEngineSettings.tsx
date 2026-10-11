@@ -16,6 +16,8 @@ import {
 } from '@/shared/constants/engines'
 import { BackendRow } from '@/ui/components/BackendRow/BackendRow'
 import { InlineErrorBanner } from '@/ui/components/InlineErrorBanner'
+import { isElectron } from '@/ui/api/bootstrap'
+import CloudProvidersSettingsCard from '@/ui/components/ServiceSettings/CloudProvidersSettings'
 
 /**
  * Inline engine editor for a single node, rendered inside the overview node
@@ -121,6 +123,7 @@ export default function NodeEngineSettings({ nodeId }: { nodeId: string }) {
                     statusKnown={statusKnown}
                 />
             ))}
+            {isElectron && nodeId === selfId && <CloudProvidersSettingsCard />}
         </Stack>
     )
 }

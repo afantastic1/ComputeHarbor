@@ -11,9 +11,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -384,11 +386,12 @@ func (d *gatewayDispatcher) resolveLocalAuto(
 	traits gatewayRequestTraits,
 	body []byte,
 ) (gatewayRoute, *gatewayDispatchError) {
+	inventory := d.proxy.gatewayInventory()
 	selection := (modelselection.AutoModelSelector{}).Select(alias, modelselection.Requirements{
 		Capabilities: traits.capabilities,
-	}, d.proxy.gatewayInventory())
+	}, inventory)
 	if selection == nil {
-		return gatewayRoute{}, noCompatibleLocalModel(d.proxy.gatewayInventory(), traits.capabilities)
+		return gatewayRoute{}, noCompatibleLocalModel(inventory, traits.capabilities)
 	}
 	return gatewayRoute{
 		facade: d.proxy.facadeFor(selection.Engine), requestModel: alias,
@@ -595,19 +598,33 @@ func (d *gatewayDispatcher) dispatchCloudForCaller(w http.ResponseWriter, r *htt
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		usage := reportedCloudUsage(response.Body)
 		settleCloudBudget(reservation, route)
+		if response.StatusCode == http.StatusTooManyRequests {
+			if retryAfter := safeRetryAfter(response.Header.Get("Retry-After")); retryAfter != "" {
+				w.Header().Set("Retry-After", retryAfter)
+			}
+		}
 		writeProviderHTTPError(w, response.StatusCode)
 		workload.finish("failed", "cloud provider request failed", usage, nil)
 		return
 	}
+	contentType := response.Header.Get("Content-Type")
+	isCloudSSE := route.traits.stream && cloudResponseIsSSE(contentType)
+	if isCloudSSE {
+		if _, ok := w.(http.Flusher); !ok {
+			settleCloudBudget(reservation, route)
+			writeGatewayError(w, http.StatusBadGateway, "streaming responses are not supported", "provider_error")
+			workload.finish("failed", "streaming response is not supported", reportedCloudUsage(response.Body), nil)
+			return
+		}
+	}
 	for _, header := range []string{"Content-Type", "Cache-Control", "Retry-After"} {
-		if value := response.Header.Get(header); value != "" {
+		if value := safeCloudResponseHeader(header, response.Header.Get(header)); value != "" {
 			w.Header().Set(header, value)
 		}
 	}
 	w.WriteHeader(response.StatusCode)
 	var copyErr error
-	if route.traits.stream && response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices &&
-		strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
+	if isCloudSSE {
 		copyErr = copyCloudStream(w, response.Body)
 	} else {
 		_, copyErr = io.Copy(w, response.Body)
@@ -683,6 +700,50 @@ func writeProviderHTTPError(w http.ResponseWriter, status int) {
 	default:
 		writeGatewayError(w, http.StatusBadRequest, "cloud provider rejected the request", "provider_error")
 	}
+}
+
+func safeRetryAfter(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 128 || strings.ContainsAny(value, "\r\n") {
+		return ""
+	}
+	if seconds, err := strconv.ParseUint(value, 10, 64); err == nil && seconds <= uint64((1<<63-1)/int64(time.Second)) {
+		return strconv.FormatUint(seconds, 10)
+	}
+	if _, err := http.ParseTime(value); err == nil {
+		return value
+	}
+	return ""
+}
+
+func safeCloudResponseHeader(name, value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 4096 || strings.ContainsAny(value, "\r\n") {
+		return ""
+	}
+	for _, character := range value {
+		if character < 0x20 && character != '\t' || character == 0x7f {
+			return ""
+		}
+	}
+	switch name {
+	case "Content-Type":
+		if _, _, err := mime.ParseMediaType(value); err != nil {
+			return ""
+		}
+		return value
+	case "Cache-Control":
+		return value
+	case "Retry-After":
+		return safeRetryAfter(value)
+	default:
+		return ""
+	}
+}
+
+func cloudResponseIsSSE(value string) bool {
+	mediaType, _, err := mime.ParseMediaType(value)
+	return err == nil && strings.EqualFold(mediaType, "text/event-stream")
 }
 
 func slogCloudStreamError(route gatewayRoute, status int, err error) {

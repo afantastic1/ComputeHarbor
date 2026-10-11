@@ -46,6 +46,35 @@ describe('UUID node keying', () => {
         expect(workloads[0].engine).toBeUndefined()
     })
 
+    it('parses Android MNN workloads without adding MNN to the desktop engine catalog', () => {
+        const workloads = parseWorkloadsInitial({
+            workloads: [
+                {
+                    id: 'mnn-job-1',
+                    model: 'qwen3-1.7b',
+                    engine: 'mnn',
+                    state: 'completed',
+                    originatedFrom: 'android-node',
+                    scheduledOn: 'android-node',
+                    createdAt: 1,
+                    startedAt: 2,
+                    completedAt: 3,
+                    error: null,
+                    requesterId: null
+                }
+            ]
+        })
+
+        expect(workloads).toHaveLength(1)
+        expect(workloads[0]).toMatchObject({
+            engine: 'mnn',
+            model: 'qwen3-1.7b',
+            originatedFrom: 'android-node',
+            scheduledOn: 'android-node',
+            state: 'completed'
+        })
+    })
+
     it('merges a broker node and a same-hostUuid proxy node into one UUID-keyed entry', () => {
         const state = getModularBridgeState()
         state.handleNotification({

@@ -43,6 +43,21 @@ func TestPrioritySnapshotReturnsDetachedResourceMap(t *testing.T) {
 	}
 }
 
+func TestOldSchedulerPressureKeepsOfficialProxyPriorityValue(t *testing.T) {
+	proxy := prProxy(t)
+	applySnapshot(proxy, schedulerwire.Priority{
+		Nodes: []string{"pc-a", "pc-b"},
+		Ranks: []schedulerwire.NodeRank{
+			{ID: "pc-a", Pending: 2, GPUPressure: 1},
+			{ID: "pc-b", Pending: 2, GPUPressure: 0},
+		},
+	})
+
+	if got := reservedID(proxy, reservationCandidates("pc-a", "pc-b")); got != "pc-b" {
+		t.Fatalf("official Proxy chose %q, want pc-b using the scheduler's numeric pressure", got)
+	}
+}
+
 func TestPrioritySnapshotReadsRemainConsistentDuringUpdates(t *testing.T) {
 	proxy := NewProxy(nil)
 	var workers sync.WaitGroup

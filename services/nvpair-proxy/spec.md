@@ -189,7 +189,7 @@ which takes one off and puts the other on.
 | Class | Addressed? | Examples |
 | --- | --- | --- |
 | Facade-scoped | yes | `ready`, `error`, `node/*`, `errors:*`, `set-port`, `discovery:subscribe`, `discovery:nodes` |
-| Process-scoped | no | `log/set-level`, `node/set-priority`, `workload:*`, `discovery:node-activity` |
+| Process-scoped | no | `log/set-level`, `node/set-priority`, `node/set-scheduler-health`, `workload:*`, `discovery:node-activity` |
 | Bootstrap | names its engine in the payload | `facade/enable` |
 
 `facade/enable` is unaddressed because it runs *before* the facade it names
@@ -582,6 +582,21 @@ dispatch.
 
 `node/set-priority` therefore carries a generation and is applied at most once;
 a redelivered snapshot must not clear live reservations.
+
+The Broker reports the supervised Scheduler process state through the
+process-scoped `node/set-scheduler-health {healthy}` method. A down report makes
+Gateway model scoring treat pending and GPU pressure as unknown. It does not
+clear or rewrite the priority snapshot, reservations, or generation used by
+official Proxy node placement. On older Scheduler payloads,
+`gpuPressureKnown` is absent and therefore false for Gateway scoring, while the
+numeric pressure remains available to the existing Proxy placement algorithm.
+
+Gateway inventory obtains eligible node IDs from one read-only candidate-view
+pass per facade. The advertised model inventory is paired with the Proxy's
+self-target, manual-node, address-resolution, and current cluster-pin checks;
+the view takes no reservation. Admission does not guarantee a successful
+connection. Dispatch still resolves and schedules the selected model through
+the normal Proxy path.
 
 ## 7. Listener personalities
 

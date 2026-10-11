@@ -413,6 +413,8 @@ type Proxy struct {
 	priorityGPUPressure      map[string]int
 	priorityGPUPressureKnown map[string]bool
 	priorityReservations     map[string]int
+	// schedulerUnavailable gates resource inputs to Gateway model scoring only.
+	schedulerUnavailable     bool
 
 	// appliedPriorityGeneration is the newest snapshot generation applied, so a
 	// redelivered or superseded one cannot clear reservations twice. See
@@ -1989,6 +1991,14 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 // Returns an empty slice when no forwarding target is available; the caller
 // treats that as the rejection path.
 func (f *facade) resolveCandidates(model string) []candidate {
+	return f.resolveCandidatesWithHostDedup(model, true)
+}
+
+func (f *facade) resolveCandidateViews() []candidate {
+	return f.resolveCandidatesWithHostDedup("", false)
+}
+
+func (f *facade) resolveCandidatesWithHostDedup(model string, deduplicateHosts bool) []candidate {
 	p := f.host
 	id := f.SelectedID()
 
@@ -2082,7 +2092,7 @@ func (f *facade) resolveCandidates(model string) []candidate {
 				"node_id", n.ID, "target", u.Host)
 			return
 		}
-		if seenHost[u.Host] {
+		if deduplicateHosts && seenHost[u.Host] {
 			return
 		}
 		seenHost[u.Host] = true
@@ -2485,7 +2495,8 @@ type priorityNodeSnapshot struct {
 }
 
 type priorityStateSnapshot struct {
-	nodes map[string]priorityNodeSnapshot
+	nodes                map[string]priorityNodeSnapshot
+	schedulerUnavailable bool
 }
 
 // prioritySnapshot returns a detached, read-only view of scheduler resource
@@ -2498,8 +2509,7 @@ func (p *Proxy) prioritySnapshot() priorityStateSnapshot {
 	nodes := make(map[string]priorityNodeSnapshot, len(p.priorityPending)+len(p.priorityReservations))
 	for id, pending := range p.priorityPending {
 		node := nodes[id]
-		node.pending = pending
-		node.pendingKnown = true
+		node.pending, node.pendingKnown = pending, true
 		nodes[id] = node
 	}
 	for id, pressure := range p.priorityGPUPressure {
@@ -2513,7 +2523,16 @@ func (p *Proxy) prioritySnapshot() priorityStateSnapshot {
 		node.reservations = reservations
 		nodes[id] = node
 	}
-	return priorityStateSnapshot{nodes: nodes}
+	return priorityStateSnapshot{nodes: nodes, schedulerUnavailable: p.schedulerUnavailable}
+}
+
+// SetSchedulerHealth changes only the Gateway's view of resource freshness.
+// The scheduler's ranking, reservations, and applied generation remain intact
+// for the official Proxy routing path.
+func (p *Proxy) SetSchedulerHealth(healthy bool) {
+	p.priorityMu.Lock()
+	p.schedulerUnavailable = !healthy
+	p.priorityMu.Unlock()
 }
 
 // SetPriority stores the auto-routing priority order (highest first) and returns
@@ -2880,6 +2899,23 @@ func (p *Proxy) handleMessage(msg *Message) {
 		log.Printf("priority snapshot set (%d nodes, %d ranks): %v", count, len(params.Ranks), params.Nodes)
 		if err := p.codec.Respond(msg.ID, map[string]int{"count": count}); err != nil {
 			log.Printf("failed to respond to node/set-priority: %v", err)
+		}
+
+	case "node/set-scheduler-health":
+		var params struct {
+			Healthy *bool `json:"healthy"`
+		}
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			p.codec.RespondError(msg.ID, -32602, "invalid params: expected {\"healthy\": <bool>}")
+			return
+		}
+		if params.Healthy == nil {
+			p.codec.RespondError(msg.ID, -32602, "invalid params: healthy is required")
+			return
+		}
+		p.SetSchedulerHealth(*params.Healthy)
+		if err := p.codec.Respond(msg.ID, map[string]bool{"healthy": *params.Healthy}); err != nil {
+			log.Printf("failed to respond to node/set-scheduler-health: %v", err)
 		}
 
 	case "set-port":

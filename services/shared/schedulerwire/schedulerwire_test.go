@@ -60,6 +60,29 @@ func TestEnginePriorityRoundTripsGPUAwareRanks(t *testing.T) {
 	}
 }
 
+func TestNodeRankAcceptsOldAndFreshnessAwareJSON(t *testing.T) {
+	tests := []struct {
+		name     string
+		payload  string
+		known    bool
+		pressure int
+	}{
+		{name: "old scheduler omits freshness", payload: `{"id":"pc-a","pending":2,"gpuPressure":1,"rank":0}`, pressure: 1},
+		{name: "new scheduler marks freshness", payload: `{"id":"pc-a","pending":2,"gpuPressure":1,"gpuPressureKnown":true,"rank":0}`, known: true, pressure: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var got NodeRank
+			if err := json.Unmarshal([]byte(test.payload), &got); err != nil {
+				t.Fatalf("unmarshal NodeRank: %v", err)
+			}
+			if got.ID != "pc-a" || got.Pending != 2 || got.GPUPressure != test.pressure || got.GPUPressureKnown != test.known || got.Rank != 0 {
+				t.Fatalf("NodeRank = %+v, want known=%v pressure=%d", got, test.known, test.pressure)
+			}
+		})
+	}
+}
+
 func TestPriorityCopiesOwnTheirSlices(t *testing.T) {
 	source := EnginePriority{
 		Engine: "ollama",

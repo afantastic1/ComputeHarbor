@@ -57,7 +57,17 @@ func (p *Proxy) gatewayInventory() []modelselection.RuntimeModel {
 	candidates := make(map[string]modelselection.RuntimeModel)
 	for _, f := range p.enabledFacades() {
 		engine := f.profile.Name
+		// Reuse the Proxy's complete routing admission rules once per facade.
+		// This is a read-only candidate view: no reservation is taken and the
+		// final request still goes through resolveCandidates/reserveCandidate.
+		routable := make(map[string]struct{})
+		for _, candidate := range f.resolveCandidateViews() {
+			routable[candidate.id] = struct{}{}
+		}
 		for _, node := range f.discovery.Nodes() {
+			if _, ok := routable[node.ID]; !ok {
+				continue
+			}
 			for _, model := range node.Models {
 				if strings.TrimSpace(model) == "" {
 					continue
@@ -78,7 +88,7 @@ func (p *Proxy) gatewayInventory() []modelselection.RuntimeModel {
 						break
 					}
 				}
-				if resource, ok := priority.nodes[node.ID]; ok {
+				if resource, ok := priority.nodes[node.ID]; ok && !priority.schedulerUnavailable {
 					candidate.PendingRequests = resource.pending
 					candidate.PendingKnown = resource.pendingKnown
 					candidate.GPUPressure = resource.gpuPressure

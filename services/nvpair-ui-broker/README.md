@@ -171,7 +171,12 @@ snapshot resets optimistic reservation deltas. On scheduler spawn/restart the
 broker replays active workloads and telemetry before discovery, then resumes all
 three live feeds.
 
-`schedule:priority` and `node/set-priority` are internal worker contracts: the broker does not expose either notification to its connected client.
+The broker's existing Scheduler supervisor reports process crashes and
+successful restarts to each proxy through `node/set-scheduler-health`. A down
+report only makes Gateway model scoring treat cached resources as unknown; the
+proxy's scheduler ordering, reservations, and generation remain intact.
+
+`schedule:priority`, `node/set-priority`, and `node/set-scheduler-health` are internal worker contracts: the broker does not expose them to its connected client.
 
 **`nvpair-cluster-manager`** owns the node's stable cryptographic identity (a self-generated UUID + Ed25519 self-signed certificate), the trusted-node store, and the EAP-NOOB PIN-based pairing flow that bootstraps mTLS trust between machines. Like ollama-proxy it's a full bidirectional JSON-RPC peer, and like the rest it's supervised **optionally and non-fatally**: a missing default sibling (and no `--cluster-manager-path`) just means the broker runs without cluster pairing. The broker is a **generic relay** for it in both directions: any `cluster:*` or `nodes:*` request a client sends is forwarded verbatim and the response (result or JSON-RPC error) is relayed straight back, and every notification the manager pushes is forwarded to the client unchanged. Unlike the proxy stream these events are not opt-in — they're low-volume, important pairing/membership pushes (`cluster:invite-received`, `cluster:identity-changed`, `nodes:changed`, ...), so they always flow. `errors:report` / `errors:clear` are the one exception: like the proxy's, they target `nvpair-errors` (which the broker doesn't supervise) and are dropped. Because pairing calls drive multi-round-trip inter-node network exchanges, the relay's per-call timeout is more generous (30 s) than the proxy's local control-plane timeout.
 

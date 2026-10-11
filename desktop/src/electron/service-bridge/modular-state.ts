@@ -361,15 +361,19 @@ function parseWorkload(value: JsonValue | undefined): Workload | null {
     const kindValue = stringValue(obj.kind)
     if (kindValue !== '' && kindValue !== 'cloud' && kindValue !== 'local') return null
     const kind = kindValue === 'cloud' ? 'cloud' : 'local'
-    let engine: EngineType | undefined
+    let engine: Workload['engine']
     if (kind === 'cloud') {
         if (!stringValue(obj.providerId) || !stringValue(obj.publicModelId)) return null
     } else {
-        // The workload-manager stamps the engine-manager id (`lmstudio`); map it
-        // onto our closed EngineType union (`lm-studio`) before narrowing.
-        const parsedEngine = engineTypeFromManagerName(stringValue(obj.engine))
-        if (parsedEngine === null) return null
-        engine = parsedEngine
+        if (stringValue(obj.engine) === 'mnn') {
+            engine = 'mnn'
+        } else {
+            // The workload-manager stamps the engine-manager id (`lmstudio`); map it
+            // onto our closed EngineType union (`lm-studio`) before narrowing.
+            const parsedEngine = engineTypeFromManagerName(stringValue(obj.engine))
+            if (parsedEngine === null) return null
+            engine = parsedEngine
+        }
     }
     const stateValue = stringValue(obj.state)
     if (!isWorkloadState(stateValue)) return null

@@ -328,6 +328,107 @@ func TestRepushPriorityDeliversCompleteSnapshotToReplacementProxy(t *testing.T) 
 	waitSchedulerTestChannel(t, replayed, "priority replay did not finish")
 }
 
+func TestSchedulePriorityPreservesOptionalFreshnessThroughBrokerForwarding(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		known   bool
+		payload string
+	}{
+		{name: "old scheduler", payload: `{"engine":"ollama","nodes":["pc-a"],"ranks":[{"id":"pc-a","pending":2,"gpuPressure":1,"rank":0}]}`},
+		{name: "new scheduler", known: true, payload: `{"engine":"ollama","nodes":["pc-a"],"ranks":[{"id":"pc-a","pending":2,"gpuPressure":1,"gpuPressureKnown":true,"rank":0}]}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			brokerSide, proxySide := net.Pipe()
+			t.Cleanup(func() {
+				_ = brokerSide.Close()
+				_ = proxySide.Close()
+			})
+			proxy := &proxyProcess{peer: NewPeer(NewCodec(brokerSide))}
+			go proxy.peer.Serve(nil, nil)
+			b := &Broker{}
+			b.setProxy(proxy)
+			b.forwardSchedulerNotification("schedule:priority", json.RawMessage(test.payload))
+
+			if err := proxySide.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+				t.Fatalf("set proxy pipe deadline: %v", err)
+			}
+			codec := NewCodec(proxySide)
+			request := readSchedulerTestMessage(t, codec)
+			if request.Method != "node/set-priority" {
+				t.Fatalf("method = %q, want node/set-priority", request.Method)
+			}
+			var got schedulerwire.Priority
+			if err := json.Unmarshal(request.Params, &got); err != nil {
+				t.Fatalf("decode forwarded priority: %v", err)
+			}
+			if len(got.Ranks) != 1 || got.Ranks[0].ID != "pc-a" || got.Ranks[0].Pending != 2 || got.Ranks[0].GPUPressure != 1 || got.Ranks[0].GPUPressureKnown != test.known {
+				t.Fatalf("forwarded rank = %+v, want freshness known=%v with pressure=1", got.Ranks, test.known)
+			}
+			if got.Generation == 0 {
+				t.Fatal("forwarded priority has no generation")
+			}
+			if err := codec.Respond(request.ID, map[string]int{"count": 1}); err != nil {
+				t.Fatalf("respond to priority: %v", err)
+			}
+			health := readSchedulerTestMessage(t, codec)
+			if health.Method != "node/set-scheduler-health" {
+				t.Fatalf("second method = %q, want node/set-scheduler-health after priority delivery", health.Method)
+			}
+			var healthParams struct {
+				Healthy bool `json:"healthy"`
+			}
+			if err := json.Unmarshal(health.Params, &healthParams); err != nil {
+				t.Fatalf("decode scheduler health: %v", err)
+			}
+			if !healthParams.Healthy {
+				t.Fatal("scheduler marked unhealthy after forwarding its first ranking")
+			}
+			if err := codec.Respond(health.ID, map[string]bool{"healthy": true}); err != nil {
+				t.Fatalf("respond to health update: %v", err)
+			}
+		})
+	}
+}
+
+func TestSchedulerHealthUsesSeparateProxySignal(t *testing.T) {
+	brokerSide, proxySide := net.Pipe()
+	t.Cleanup(func() {
+		_ = brokerSide.Close()
+		_ = proxySide.Close()
+	})
+	proxy := &proxyProcess{peer: NewPeer(NewCodec(brokerSide))}
+	go proxy.peer.Serve(nil, nil)
+	b := &Broker{}
+	b.setProxy(proxy)
+
+	done := make(chan struct{})
+	go func() {
+		b.setSchedulerHealth(false)
+		close(done)
+	}()
+	if err := proxySide.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set proxy pipe deadline: %v", err)
+	}
+	codec := NewCodec(proxySide)
+	request := readSchedulerTestMessage(t, codec)
+	if request.Method != "node/set-scheduler-health" {
+		t.Fatalf("method = %q, want node/set-scheduler-health", request.Method)
+	}
+	var got struct {
+		Healthy bool `json:"healthy"`
+	}
+	if err := json.Unmarshal(request.Params, &got); err != nil {
+		t.Fatalf("decode health signal: %v", err)
+	}
+	if got.Healthy {
+		t.Fatal("scheduler-down signal marked scheduler healthy")
+	}
+	if err := codec.Respond(request.ID, map[string]bool{"healthy": false}); err != nil {
+		t.Fatalf("respond to health signal: %v", err)
+	}
+	waitSchedulerTestChannel(t, done, "scheduler health delivery did not finish")
+}
+
 func waitSchedulerTestChannel(t *testing.T, ch <-chan struct{}, failure string) {
 	t.Helper()
 	select {

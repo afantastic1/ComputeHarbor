@@ -10,7 +10,8 @@ export interface Workload {
     id: string
     model: string
     kind?: 'local' | 'cloud'
-    engine?: EngineType
+    /** MNN is reported by Android workload events, but is not a desktop-managed engine. */
+    engine?: EngineType | 'mnn'
     providerId?: string
     publicModelId?: string
     usage?: { inputTokens: number; outputTokens: number }

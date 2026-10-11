@@ -145,6 +145,52 @@ func TestHandleSetPriority_Response(t *testing.T) {
 	}
 }
 
+func TestHandleSetSchedulerHealthDoesNotChangePriorityGenerationOrReservations(t *testing.T) {
+	rec := &recRW{}
+	p := newTestProxy(anyProfile(t), NewCodec(rec), NewDiscovery(), 11435)
+	p.SetPrioritySnapshot(schedulerwire.Priority{
+		Generation: 4,
+		Nodes:      []string{"x"},
+		Ranks:      []schedulerwire.NodeRank{{ID: "x", Pending: 3, GPUPressure: 2, GPUPressureKnown: true}},
+	})
+	_, held := p.reserveCandidate(p.soleFacade(), reservationCandidates("x"))
+	if !held.held {
+		t.Fatal("no reservation was taken")
+	}
+
+	id := json.RawMessage(`9`)
+	p.handleMessage(&Message{
+		JSONRPC: "2.0",
+		ID:      &id,
+		Method:  "node/set-scheduler-health",
+		Params:  json.RawMessage(`{"healthy":false}`),
+	})
+
+	snapshot := p.prioritySnapshot()
+	if !snapshot.schedulerUnavailable {
+		t.Fatal("Gateway resource snapshot remains marked healthy")
+	}
+	if p.appliedPriorityGeneration != 4 || p.priorityPending["x"] != 3 || p.priorityReservations["x"] != 1 {
+		t.Fatalf("health signal changed official priority state: generation=%d pending=%v reservations=%v",
+			p.appliedPriorityGeneration, p.priorityPending, p.priorityReservations)
+	}
+	var frame struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(rec.b, &frame); err != nil {
+		t.Fatalf("decode health response frame: %v", err)
+	}
+	var result struct {
+		Healthy bool `json:"healthy"`
+	}
+	if err := json.Unmarshal(frame.Result, &result); err != nil {
+		t.Fatalf("decode health response result: %v", err)
+	}
+	if result.Healthy {
+		t.Fatalf("health response = %+v, want healthy=false", result)
+	}
+}
+
 // A generation is required, because this method is relayed verbatim from any
 // client. An unversioned snapshot would clear the reservations without
 // advancing the epoch, so a reservation taken before it would still match and

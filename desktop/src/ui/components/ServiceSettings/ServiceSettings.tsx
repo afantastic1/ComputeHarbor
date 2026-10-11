@@ -26,7 +26,6 @@ import { InlineErrorBanner } from '@/ui/components/InlineErrorBanner'
 import ApplicationUpdatesCard from './UpdatesSettings'
 import VersionsCard from './VersionsCard'
 import WipeAppDataCard from './WipeAppDataCard'
-import CloudProvidersSettingsCard from './CloudProvidersSettings'
 import { useOverviewUiStore } from '@/ui/stores/overview-ui.store'
 import { useInferenceDemoStore } from '@/ui/stores/inference-demo.store'
 
@@ -382,7 +381,6 @@ export default function ServiceSettings() {
                 <ApplicationUpdatesCard />
             </Flex>
 
-            {isElectron && <CloudProvidersSettingsCard />}
             <VersionsCard />
         </Stack>
     )

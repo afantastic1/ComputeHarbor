@@ -13,9 +13,11 @@
 ## Drift summary
 
 ### Notifications emitted but NOT consumed by the bridge
-- none ✅
+- ❌ nvpair-cluster-manager → cluster:join-request-received
 
 ### Requests the backend handles but the bridge never calls (unused capability)
+- ⚠️ nvpair-cluster-manager → cluster:list-join-requests
+- ⚠️ nvpair-cluster-manager → cluster:list-memberships
 - ⚠️ nvpair-engine-manager → engine:configure-launch
 - ⚠️ nvpair-engine-manager → engine:configured-ports
 - ⚠️ nvpair-engine-manager → engine:describe
@@ -64,6 +66,7 @@
 | `cluster:invite-canceled` | notification (we consume) | ✅ yes |
 | `cluster:invite-expired` | notification (we consume) | ✅ yes |
 | `cluster:invite-received` | notification (we consume) | ✅ yes |
+| `cluster:join-request-received` | notification (we consume) | ❌ **MISSING** |
 | `cluster:trust-changed` | notification (we consume) | ➖ ignored |
 | `nodes:changed` | notification (we consume) | ✅ yes |
 | `cluster:cancel-invite` | request (we call) | ✅ yes |
@@ -72,6 +75,8 @@
 | `cluster:invite-node` | request (we call) | ✅ yes |
 | `cluster:invite-status` | request (we call) | ✅ yes |
 | `cluster:leave` | request (we call) | ✅ yes |
+| `cluster:list-join-requests` | request (we call) | ⚠️ not called |
+| `cluster:list-memberships` | request (we call) | ⚠️ not called |
 | `cluster:respond-to-invite` | request (we call) | ✅ yes |
 | `cluster:set-identity` | request (we call) | ✅ yes |
 | `nodes:get-initial` | request (we call) | ✅ yes |
@@ -225,6 +230,7 @@
 | `node/selected` | request (we call) | ⚠️ not called |
 | `node/set-local-backend` | request (we call) | ⚠️ not called |
 | `node/set-priority` | request (we call) | ✅ yes |
+| `node/set-scheduler-health` | request (we call) | ➖ ignored |
 | `nodes/list` | request (we call) | ✅ yes |
 
 **Dynamic / unresolved notify sites (verify by hand — `npm run service-contracts` prints the line numbers):**

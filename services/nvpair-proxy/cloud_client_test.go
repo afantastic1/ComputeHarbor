@@ -115,9 +115,12 @@ func TestCloudClientDoesNotReplayPOSTAfterUpstreamDisconnect(t *testing.T) {
 	provider := cloudProviderRuntime{ID: "p", Protocol: "openai_chat_completions", BaseURL: server.URL, Enabled: true}
 	target := cloudModelTarget{PublicID: "cloud/p/model", ProviderID: "p", UpstreamID: "upstream", Enabled: true}
 	client := newCloudHTTPClient(cloudHTTPOptions{allowLoopback: true})
-	_, err := client.DoChat(context.Background(), provider, target, target.PublicID, "secret", []byte(`{"model":"cloud/p/model","messages":[]}`))
+	response, err := client.DoChat(context.Background(), provider, target, target.PublicID, "secret", []byte(`{"model":"cloud/p/model","messages":[]}`))
 	if err == nil {
 		t.Fatal("disconnected provider request unexpectedly succeeded")
+	}
+	if response != nil {
+		t.Fatalf("DoChat returned response %#v alongside transport error %v", response, err)
 	}
 	if got := hits.Load(); got != 1 {
 		t.Fatalf("upstream received %d POSTs after disconnect, want exactly one", got)
@@ -183,9 +186,12 @@ func TestCloudClientLimitsNonStreamingResponseBody(t *testing.T) {
 	provider := cloudProviderRuntime{ID: "p", Protocol: "openai_chat_completions", BaseURL: server.URL, Enabled: true}
 	target := cloudModelTarget{PublicID: "cloud/p/model", ProviderID: "p", UpstreamID: "upstream", Enabled: true}
 	client := newCloudHTTPClient(cloudHTTPOptions{allowLoopback: true, maxResponseBytes: 16})
-	_, err := client.DoChat(context.Background(), provider, target, target.PublicID, "secret", []byte(`{"model":"cloud/p/model","messages":[],"stream":false}`))
+	response, err := client.DoChat(context.Background(), provider, target, target.PublicID, "secret", []byte(`{"model":"cloud/p/model","messages":[],"stream":false}`))
 	if err == nil || !strings.Contains(err.Error(), "size limit") {
 		t.Fatalf("oversized response error=%v", err)
+	}
+	if response != nil {
+		t.Fatalf("DoChat returned response %#v alongside response size error %v", response, err)
 	}
 }
 
@@ -202,9 +208,12 @@ func TestCloudClientTimesOutStalledNonStreamingResponse(t *testing.T) {
 	provider := cloudProviderRuntime{ID: "p", Protocol: "openai_chat_completions", BaseURL: server.URL, Enabled: true}
 	target := cloudModelTarget{PublicID: "cloud/p/model", ProviderID: "p", UpstreamID: "upstream", Enabled: true}
 	client := newCloudHTTPClient(cloudHTTPOptions{allowLoopback: true, nonStreamTimeout: 25 * time.Millisecond})
-	_, err := client.DoChat(context.Background(), provider, target, target.PublicID, "secret", []byte(`{"model":"cloud/p/model","messages":[],"stream":false}`))
+	response, err := client.DoChat(context.Background(), provider, target, target.PublicID, "secret", []byte(`{"model":"cloud/p/model","messages":[],"stream":false}`))
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("stalled response error=%v", err)
+	}
+	if response != nil {
+		t.Fatalf("DoChat returned response %#v alongside timeout error %v", response, err)
 	}
 	select {
 	case <-upstreamCanceled:

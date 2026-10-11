@@ -340,11 +340,15 @@ type Broker struct {
 	//
 	// priorityApplyMu serializes asynchronous node/set-priority deliveries; a
 	// stale generation is skipped before it can overwrite a newer proxy order.
-	schedMu            sync.Mutex
-	lastPriority       schedulerwire.Priority
-	havePriority       bool
-	priorityGeneration uint64
-	priorityApplyMu    sync.Mutex
+	schedMu                     sync.Mutex
+	lastPriority                schedulerwire.Priority
+	havePriority                bool
+	priorityGeneration          uint64
+	priorityApplyMu             sync.Mutex
+	schedulerReady              bool
+	schedulerApplyingGeneration uint64
+	schedulerEpoch              atomic.Uint64
+	schedulerHealthMu           sync.Mutex
 
 	// schedulerFeedMu serializes scheduler initialization with live discovery
 	// and workload fanout. A restarted scheduler receives its active workload
@@ -1235,6 +1239,11 @@ func (b *Broker) spawnSettings() (supervisedHandle, error) {
 }
 
 func (b *Broker) spawnJobScheduler() (supervisedHandle, error) {
+	b.schedulerEpoch.Add(1)
+	b.schedMu.Lock()
+	b.schedulerReady = false
+	b.schedulerApplyingGeneration = 0
+	b.schedMu.Unlock()
 	w, err := startRPCWorker("scheduler", b.schedulerPath, b.logLevelArgs(), b.forwardSchedulerNotification)
 	if err != nil {
 		return nil, err
@@ -1818,6 +1827,7 @@ func (b *Broker) forwardSchedulerNotification(method string, params json.RawMess
 		return
 	}
 	if method == "schedule:priority" {
+		epoch := b.schedulerEpoch.Load()
 		var p schedulerwire.EnginePriority
 		if err := json.Unmarshal(params, &p); err != nil {
 			slog.Warn("bad schedule:priority payload", "err", err)
@@ -1827,12 +1837,35 @@ func (b *Broker) forwardSchedulerNotification(method string, params json.RawMess
 		if !fresh {
 			// The scheduler's duplicate emission of one recompute. Dropped here,
 			// before it mints a generation, so nothing downstream sees it at all.
+			b.schedMu.Lock()
+			ready := b.schedulerReady
+			applying := b.schedulerApplyingGeneration != 0
+			b.schedMu.Unlock()
+			if !ready && !applying {
+				go func() {
+					b.repushPriority(context.Background())
+					b.markSchedulerReady(epoch)
+				}()
+			}
 			return
 		}
+		b.schedMu.Lock()
+		b.schedulerApplyingGeneration = generation
+		b.schedMu.Unlock()
 		// Dispatch off the reader goroutine: the node/set-priority round-trip
 		// blocks on the proxy's response, so calling it inline would stall the
 		// scheduler's notification stream.
-		go b.applyPriority(generation)
+		go func() {
+			applied := b.applyPriority(generation)
+			b.schedMu.Lock()
+			if b.schedulerApplyingGeneration == generation {
+				b.schedulerApplyingGeneration = 0
+			}
+			b.schedMu.Unlock()
+			if applied {
+				b.markSchedulerReady(epoch)
+			}
+		}()
 		return
 	}
 	slog.Debug("ignoring scheduler notification", "method", method)
@@ -1898,8 +1931,8 @@ func (b *Broker) cachePrioritySnapshot(priority schedulerwire.Priority) (generat
 // and the cache is now process-wide: with the duplicate emission dropped at
 // ingestion, the surviving frame is whichever engine the scheduler emitted
 // first, so delivering only to that engine's proxy would starve the other.
-func (b *Broker) applyPriority(generation uint64) {
-	b.deliverPrioritySnapshot(generation, func(priority schedulerwire.Priority) {
+func (b *Broker) applyPriority(generation uint64) bool {
+	return b.deliverPrioritySnapshot(generation, func(priority schedulerwire.Priority) {
 		b.sendPriority(context.Background(), priority)
 	})
 }
@@ -1921,6 +1954,55 @@ func (b *Broker) sendPriority(ctx context.Context, priority schedulerwire.Priori
 				"code", rpcErr.Code, "msg", rpcErr.Message)
 		}
 	}
+}
+
+// setSchedulerHealth tells proxies whether the broker's supervised scheduler
+// is currently available. Proxies use this only to gate Gateway resource
+// scoring; their official priority and reservation state is left untouched.
+func (b *Broker) setSchedulerHealth(healthy bool) {
+	b.schedulerHealthMu.Lock()
+	defer b.schedulerHealthMu.Unlock()
+	b.sendSchedulerHealth(healthy)
+}
+
+func (b *Broker) sendSchedulerHealth(healthy bool) {
+	params, err := json.Marshal(struct {
+		Healthy bool `json:"healthy"`
+	}{Healthy: healthy})
+	if err != nil {
+		slog.Warn("marshal node/set-scheduler-health failed", "err", err)
+		return
+	}
+	for _, target := range b.livePriorityTargets() {
+		if _, rpcErr, err := target.proxy.Call(context.Background(), "node/set-scheduler-health", params); err != nil {
+			slog.Warn("node/set-scheduler-health call failed", "engine", target.engine, "err", err)
+		} else if rpcErr != nil {
+			slog.Warn("node/set-scheduler-health rejected", "engine", target.engine,
+				"code", rpcErr.Code, "msg", rpcErr.Message)
+		}
+	}
+}
+
+func (b *Broker) isSchedulerReady() bool {
+	b.schedMu.Lock()
+	defer b.schedMu.Unlock()
+	return b.schedulerReady
+}
+
+func (b *Broker) markSchedulerReady(epoch uint64) {
+	b.schedulerHealthMu.Lock()
+	defer b.schedulerHealthMu.Unlock()
+	if b.schedulerEpoch.Load() != epoch {
+		return
+	}
+	b.schedMu.Lock()
+	if b.schedulerEpoch.Load() != epoch {
+		b.schedMu.Unlock()
+		return
+	}
+	b.schedulerReady = true
+	b.schedMu.Unlock()
+	b.sendSchedulerHealth(true)
 }
 
 // priorityTarget is one proxy to deliver a ranking to, with the engine name
@@ -1958,19 +2040,20 @@ func (b *Broker) livePriorityTargets() []priorityTarget {
 // deliverPrioritySnapshot serializes deliveries and invokes deliver only if
 // generation is still current. It is split from the proxy call so ordering can
 // be verified without a subprocess.
-func (b *Broker) deliverPrioritySnapshot(generation uint64, deliver func(schedulerwire.Priority)) {
+func (b *Broker) deliverPrioritySnapshot(generation uint64, deliver func(schedulerwire.Priority)) bool {
 	b.priorityApplyMu.Lock()
 	defer b.priorityApplyMu.Unlock()
 
 	b.schedMu.Lock()
 	if b.priorityGeneration != generation {
 		b.schedMu.Unlock()
-		return
+		return false
 	}
 	priority := b.lastPriority.Clone()
 	b.schedMu.Unlock()
 
 	deliver(priority)
+	return true
 }
 
 // replayProxyStateAfterSpawn restores the broker-pushed state a fresh proxy
@@ -1992,6 +2075,9 @@ func (b *Broker) replayProxyStateAfterSpawn() {
 	// spend a call timeout re-seeding a child that is going away.
 	ctx, cancel := b.proxyBringUpContext()
 	defer cancel()
+	b.schedulerHealthMu.Lock()
+	b.sendSchedulerHealth(b.isSchedulerReady())
+	b.schedulerHealthMu.Unlock()
 	b.repushPriority(ctx)
 }
 
@@ -2333,6 +2419,18 @@ func (b *Broker) Serve(ctx context.Context) error {
 	// the other auxiliaries — absent it, the proxies keep their default order.
 	b.schedulerSup = b.startOptionalWorker("scheduler", b.schedulerPath, b.spawnJobScheduler, func() { b.setScheduler(nil) })
 	if b.schedulerSup != nil {
+		crash, _ := b.supervisedWorkerCallbacks("scheduler", func() { b.setScheduler(nil) })
+		b.schedulerSup.onCrash = func(attempt int) {
+			b.schedulerHealthMu.Lock()
+			b.schedulerEpoch.Add(1)
+			b.schedMu.Lock()
+			b.schedulerReady = false
+			b.schedulerApplyingGeneration = 0
+			b.schedMu.Unlock()
+			b.sendSchedulerHealth(false)
+			b.schedulerHealthMu.Unlock()
+			crash(attempt)
+		}
 		defer b.schedulerSup.Stop()
 	}
 

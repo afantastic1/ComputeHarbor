@@ -100,12 +100,18 @@ func TestGatewayAutoPoliciesSelectOnlyAdvertisedModels(t *testing.T) {
 	proxy := NewProxy(nil)
 	ollama, _ := profileFor("ollama")
 	mnn, _ := profileFor("mnn")
+	ollamaServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer ollamaServer.Close()
+	mnnServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer mnnServer.Close()
 	proxy.facades = map[string]*facade{
 		"ollama": newFacade(proxy, ollama, NewDiscovery(), 11435),
 		"mnn":    newFacade(proxy, mnn, NewDiscovery(), 14325),
 	}
-	proxy.facades["ollama"].discovery.AddManual(Node{ID: "pc", Models: []string{"qwen3-8b"}})
-	proxy.facades["mnn"].discovery.AddManual(Node{ID: "phone", Models: []string{"qwen3-1.7b"}, LoadedModels: []string{"qwen3-1.7b"}})
+	proxy.facades["ollama"].discovery.AddManual(nodeForModel(t, "pc", ollamaServer.URL, "qwen3-8b"))
+	mnnNode := nodeForModel(t, "phone", mnnServer.URL, "qwen3-1.7b")
+	mnnNode.LoadedModels = []string{"qwen3-1.7b"}
+	proxy.facades["mnn"].discovery.AddManual(mnnNode)
 
 	if got := proxy.resolveGatewayModel(AUTO_FAST_ALIAS, nil); got == nil || got.Model.EngineModelID != "qwen3-1.7b" || got.Engine != "mnn" {
 		t.Fatalf("fast selection = %+v, want loaded phone model", got)
@@ -121,11 +127,15 @@ func TestGatewayAutoPoliciesSelectOnlyAdvertisedModels(t *testing.T) {
 func TestGatewayInventoryRetainsEveryModelDeploymentAndFreshNodeResources(t *testing.T) {
 	proxy := NewProxy(nil)
 	ollama, _ := profileFor("ollama")
+	serverA := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer serverA.Close()
+	serverB := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer serverB.Close()
 	proxy.facades = map[string]*facade{
 		"ollama": newFacade(proxy, ollama, NewDiscovery(), 11435),
 	}
-	proxy.facades["ollama"].discovery.AddManual(Node{ID: "pc-a", Models: []string{"model-8b"}})
-	proxy.facades["ollama"].discovery.AddManual(Node{ID: "pc-b", Models: []string{"model-8b"}})
+	proxy.facades["ollama"].discovery.AddManual(nodeForModel(t, "pc-a", serverA.URL, "model-8b"))
+	proxy.facades["ollama"].discovery.AddManual(nodeForModel(t, "pc-b", serverB.URL, "model-8b"))
 	proxy.SetPrioritySnapshot(schedulerwire.Priority{
 		Generation: 1,
 		Nodes:      []string{"pc-b", "pc-a"},
@@ -152,11 +162,82 @@ func TestGatewayInventoryRetainsEveryModelDeploymentAndFreshNodeResources(t *tes
 	}
 }
 
+func TestGatewayInventoryExcludesUndialableDeployments(t *testing.T) {
+	proxy := NewProxy(nil)
+	ollama, _ := profileFor("ollama")
+	discovery := NewDiscovery()
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+	discovery.AddManual(Node{ID: "bad-node", Models: []string{"model-32b"}})
+	discovery.AddManual(nodeForModel(t, "good-node", server.URL, "model-8b"))
+	proxy.facades = map[string]*facade{"ollama": newFacade(proxy, ollama, discovery, 11435)}
+
+	selection := proxy.resolveGatewayModel(AUTO_BALANCED_ALIAS, nil)
+	if selection == nil || selection.Model.EngineModelID != "model-8b" {
+		t.Fatalf("selection = %+v, want routable 8B model", selection)
+	}
+	for _, candidate := range proxy.gatewayInventory() {
+		if candidate.Model.EngineModelID == "model-32b" {
+			t.Fatalf("inventory includes undialable deployment: %+v", candidate)
+		}
+	}
+}
+
+func TestGatewayInventoryKeepsModelOnRoutableDuplicateHostID(t *testing.T) {
+	proxy := NewProxy(nil)
+	ollama, _ := profileFor("ollama")
+	discovery := NewDiscovery()
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+	discovery.AddManual(nodeForModel(t, "alias-a", server.URL, "model-32b"))
+	discovery.AddManual(nodeForModel(t, "alias-b", server.URL, "model-8b"))
+	proxy.facades = map[string]*facade{"ollama": newFacade(proxy, ollama, discovery, 11435)}
+
+	f := proxy.facades["ollama"]
+	if got := f.resolveCandidates("model-8b"); len(got) != 1 || got[0].id != "alias-b" {
+		t.Fatalf("official candidates for 8B = %+v, want alias-b", got)
+	}
+	for _, candidate := range proxy.gatewayInventory() {
+		if candidate.NodeID == "alias-b" && candidate.Model.EngineModelID == "model-8b" {
+			return
+		}
+	}
+	t.Fatal("Gateway inventory omitted model advertised on second ID for shared host")
+}
+
+func TestGatewayInventoryIgnoresSchedulerResourcesWhenBrokerReportsDown(t *testing.T) {
+	proxy := NewProxy(nil)
+	ollama, _ := profileFor("ollama")
+	discovery := NewDiscovery()
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+	discovery.AddManual(nodeForModel(t, "pc", server.URL, "model-8b"))
+	proxy.facades = map[string]*facade{"ollama": newFacade(proxy, ollama, discovery, 11435)}
+	proxy.SetPrioritySnapshot(schedulerwire.Priority{
+		Generation: 1,
+		Nodes:      []string{"pc"},
+		Ranks:      []schedulerwire.NodeRank{{ID: "pc", Pending: 5, GPUPressure: 3, GPUPressureKnown: true}},
+	})
+	proxy.SetSchedulerHealth(false)
+
+	inventory := proxy.gatewayInventory()
+	if len(inventory) != 1 || inventory[0].PendingKnown || inventory[0].GPUPressureKnown || inventory[0].InFlightReservations != 0 {
+		t.Fatalf("inventory = %+v, want unknown resources while scheduler is down", inventory)
+	}
+	proxy.priorityMu.RLock()
+	defer proxy.priorityMu.RUnlock()
+	if proxy.appliedPriorityGeneration != 1 || proxy.priorityPending["pc"] != 5 || proxy.priorityReservations["pc"] != 0 {
+		t.Fatalf("scheduler health changed official proxy snapshot: generation=%d pending=%v reservations=%v", proxy.appliedPriorityGeneration, proxy.priorityPending, proxy.priorityReservations)
+	}
+}
+
 func TestGatewayInventoryTreatsMissingPriorityRankAsUnknown(t *testing.T) {
 	proxy := NewProxy(nil)
 	ollama, _ := profileFor("ollama")
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
 	proxy.facades = map[string]*facade{"ollama": newFacade(proxy, ollama, NewDiscovery(), 11435)}
-	proxy.facades["ollama"].discovery.AddManual(Node{ID: "pc", Models: []string{"model-8b"}})
+	proxy.facades["ollama"].discovery.AddManual(nodeForModel(t, "pc", server.URL, "model-8b"))
 	proxy.SetPrioritySnapshot(schedulerwire.Priority{Generation: 1, Nodes: []string{"pc"}})
 
 	inventory := proxy.gatewayInventory()
@@ -168,8 +249,10 @@ func TestGatewayInventoryTreatsMissingPriorityRankAsUnknown(t *testing.T) {
 func TestGatewayInventoryUsesSchedulerTelemetryFreshness(t *testing.T) {
 	proxy := NewProxy(nil)
 	ollama, _ := profileFor("ollama")
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
 	proxy.facades = map[string]*facade{"ollama": newFacade(proxy, ollama, NewDiscovery(), 11435)}
-	proxy.facades["ollama"].discovery.AddManual(Node{ID: "pc", Models: []string{"model-8b"}})
+	proxy.facades["ollama"].discovery.AddManual(nodeForModel(t, "pc", server.URL, "model-8b"))
 	proxy.SetPrioritySnapshot(schedulerwire.Priority{
 		Generation: 1,
 		Nodes:      []string{"pc"},
@@ -186,8 +269,14 @@ func TestGatewayModelRankingTracksUpdatedPrioritySnapshots(t *testing.T) {
 	proxy := NewProxy(nil)
 	ollama, _ := profileFor("ollama")
 	discovery := NewDiscovery()
-	discovery.AddManual(Node{ID: "pc-a", Models: []string{"model-32b", "model-8b"}})
-	discovery.AddManual(Node{ID: "pc-b", Models: []string{"model-8b"}})
+	serverA := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer serverA.Close()
+	serverB := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer serverB.Close()
+	pcA := nodeForModel(t, "pc-a", serverA.URL, "model-32b")
+	pcA.Models = append(pcA.Models, "model-8b")
+	discovery.AddManual(pcA)
+	discovery.AddManual(nodeForModel(t, "pc-b", serverB.URL, "model-8b"))
 	proxy.facades = map[string]*facade{"ollama": newFacade(proxy, ollama, discovery, 11435)}
 
 	selectionFor := func() *modelselection.Selection {
