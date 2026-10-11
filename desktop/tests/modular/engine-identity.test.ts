@@ -16,7 +16,7 @@ import { gatewayEndpointDisplayUrl } from '@/ui/utils/gateway-inference-paths'
 
 describe('engine identity', () => {
     it('enables llama.cpp workflows on every platform', () => {
-        expect(EngineTypes).toEqual(['ollama', 'lm-studio', 'llama-cpp'])
+        expect(EngineTypes).toEqual(['ollama', 'lm-studio', 'llama-cpp', 'strata'])
         expect(EnabledEngineTypes).toEqual(['ollama', 'lm-studio', 'llama-cpp'])
         expect(getWelcomeEngineCandidates('Windows')).toContain('llama-cpp')
         expect(getWelcomeEngineCandidates('MacOS')).toContain('llama-cpp')
@@ -27,7 +27,8 @@ describe('engine identity', () => {
         expect(WELCOME_ENGINE_DEFAULT_SELECTED).toEqual({
             ollama: true,
             'lm-studio': true,
-            'llama-cpp': true
+            'llama-cpp': true,
+            strata: false
         })
     })
 
@@ -36,6 +37,13 @@ describe('engine identity', () => {
         expect(engineManagerName('llama-cpp')).toBe('llamacpp')
         expect(engineTypeFromManagerName('llamacpp')).toBe('llama-cpp')
         expect(isEngineType('llama-cpp')).toBe(true)
+    })
+
+    it('marks Strata as an external local engine with no managed lifecycle', () => {
+        expect(EngineDisplayNames.strata).toBe('Strata (External)')
+        expect(EngineCapabilities.strata.hasInstall).toEqual([])
+        expect(EngineCapabilities.strata.hasEnginePort).toBe(false)
+        expect(EnabledEngineTypes).not.toContain('strata')
     })
 
     it('provides complete display metadata and capabilities', () => {
@@ -61,6 +69,6 @@ describe('engine identity', () => {
             hasDeleteModel: true,
             engineHub: { label: 'llama.cpp' }
         })
-        expect(gatewayEndpointDisplayUrl(8080, 'llama-cpp')).toBe('http://127.0.0.1:8080')
+        expect(gatewayEndpointDisplayUrl()).toBe('http://127.0.0.1:14326')
     })
 })

@@ -4,6 +4,8 @@
 import type { DispatcherBackend } from '@/shared/types/inference-dispatcher'
 import type { EngineType } from '@/shared/types/engines'
 
+type DemoProxyEngine = Extract<EngineType, 'ollama' | 'lm-studio' | 'llama-cpp'>
+
 /**
  * Inference Demo — a fixed, node-local burst of synthetic inference traffic sent
  * through PAIR's proxies so a user can watch real work move through the router.
@@ -55,7 +57,7 @@ export const DEMO_REQUEST_TIMEOUT_SECONDS = 120
 export const DEMO_ENGINE_PROBES: readonly {
     backend: DispatcherBackend
     /** Engine key used by the broker's proxy port registry. */
-    proxyEngine: EngineType
+    proxyEngine: DemoProxyEngine
 }[] = [
     { backend: 'ollama', proxyEngine: 'ollama' },
     { backend: 'lmstudio', proxyEngine: 'lm-studio' },

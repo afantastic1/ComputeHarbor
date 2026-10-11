@@ -106,13 +106,15 @@ across local engines. Explicit local requests delegate to that facade's
 existing request handler. Node scheduling remains owned by the existing
 facade path.
 
-The model directory also advertises `auto`, `auto-fast`, `auto-balanced`, and
-`auto-best`. `auto` resolves to `auto-balanced`. These aliases choose a model
-and engine from enabled runtime inventory only; catalog entries do not become
-candidates until an engine reports them as available. The shared model
-selector applies capability eligibility and policy scoring, then delegates
-through the selected facade so node placement remains unchanged. The gateway
-does not browse catalogs or install models.
+The model directory also advertises `auto`, `auto-fast`, `auto-balanced`,
+`auto-best`, `auto-local`, and `auto-cloud`. `auto` resolves to
+`auto-balanced`; `auto-local` forces local balanced selection and `auto-cloud`
+uses the configured paid fallback model. These aliases choose only from enabled
+runtime inventory or the single configured Cloud model; catalog entries do not
+become local candidates until an engine reports them as available. The shared
+model selector applies capability eligibility and policy scoring, then
+delegates through the selected facade so node placement remains unchanged. The
+gateway does not browse catalogs or install models.
 
 ### 3.1 Cloud provider control plane
 
@@ -174,6 +176,35 @@ The first three failures are contained within their listed boundaries. Only a
 process crash or exit takes down every facade. Containment matters here in a way
 it would not for a single-engine process: one engine's bind race must not take
 another engine's working listener with it.
+
+### 3.3 Automatic routing and paid Cloud fallback
+
+Cloud routing has three persisted policies: `local_only`, `prefer_local`, and
+`cloud_only`. `local_only` rejects explicit `cloud/...` IDs and `auto-cloud`.
+`prefer_local` keeps automatic aliases on a compatible local deployment unless
+there is no compatible, routable local deployment or every such deployment has
+fresh, known GPU pressure at `schedulerwire.MaxGPUPressure`; unknown pressure,
+CPU inference, pending work, and in-flight reservations do not count as busy.
+Only then may `allowPaidFallback` permit an automatic alias to use the one
+configured `fallbackCloudModel`. `cloud_only` sends automatic aliases directly
+to that same configured model. `auto-cloud` is an explicit Cloud request and
+does not depend on `allowPaidFallback`, but still requires Cloud to be enabled,
+Gateway authentication, Provider credentials, paired-node authorization where
+applicable, and a successful budget reservation.
+
+The fallback ID must be a canonical `cloud/...` ID and is resolved against the
+local Cloud Registry at request time. A missing or disabled selection returns an
+error; the Gateway does not rank providers, pick a first model, or substitute a
+remote provider. Existing `prefer_cloud` settings are read as `local_only` and
+marked for explicit policy confirmation. Saving a new policy clears that
+one-time migration state.
+
+Capacity classification and local model selection use the same read-only
+inventory snapshot. The Gateway takes no additional reservation: the selected
+local facade still performs live scheduling and reservation. A failed Cloud
+credential or budget preflight may use the already-resolved local route when one
+exists. Once a Cloud request is sent, Provider errors and stream failures are
+returned without replaying the prompt against another model.
 
 ## 4. Addressing
 
@@ -617,12 +648,20 @@ untouched, the primary listener stays up, and a warning is reported.
 
 ## 8. Ports
 
-| | Ollama | LM Studio | llama.cpp |
-| --- | --- | --- | --- |
+| | Ollama | LM Studio | llama.cpp | Strata |
+| --- | --- | --- | --- | --- |
 | Engine's own client-facing port | 11434 | 1234 | 8080 |
 | Where PAIR relocates the engine | 11435 | 1235 | 8081 |
-| Standalone port, when `port` is omitted | 11435 | 1234 | 8080 |
-| Persisted-port file | `proxy-port.json` | `lmstudio-proxy-port.json` | `llamacpp-proxy-port.json` |
+| Standalone port, when `port` is omitted | 11435 | 1234 | 8080 | 8082 |
+| Persisted-port file | `proxy-port.json` | `lmstudio-proxy-port.json` | `llamacpp-proxy-port.json` | `strata-proxy-port.json` |
+
+Strata is an externally managed local engine. PAIR never installs, starts, or
+stops it. Its loopback endpoint is configured in the broker; the `:8082` facade
+is advertised only while that endpoint is enabled and healthy. The verified
+routes are `GET /v1/models` and `POST /v1/chat/completions` (including SSE and
+tool calls). Image input and structured JSON output remain rejected until
+verified against Strata. Discovered model IDs are used exactly; PAIR does not
+infer model names or capabilities.
 | | Ollama | LM Studio | MNN (Android) |
 | --- | --- | --- | --- |
 | Engine's own client-facing port | 11434 | 1234 | 14325 |

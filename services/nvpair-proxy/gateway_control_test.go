@@ -13,7 +13,7 @@ func TestGatewayConfigureAppliesValidatedSettingsAndRegistry(t *testing.T) {
 	dispatcher := newGatewayDispatcher(NewProxy(NewCodec(rwNop{})))
 	params := gatewayConfigureParams{
 		Config: json.RawMessage(validCloudConfig), CloudEnabled: true,
-		Policy: gatewayPolicyCloudOnly, MonthlyBudgetUSD: 20,
+		Policy: gatewayPolicyCloudOnly, FallbackCloudModel: "cloud/deepseek/deepseek-chat", MonthlyBudgetUSD: 20,
 		PerRequestMaxEstimatedCostUSD: 2,
 		AuthorizedNodes: []gatewayCloudNodeAuthorization{{
 			NodeUUID: "10000000-0000-0000-0000-000000000001", CertFingerprint: cloudCertificateFingerprint([]byte("peer-cert")),
@@ -26,7 +26,7 @@ func TestGatewayConfigureAppliesValidatedSettingsAndRegistry(t *testing.T) {
 		t.Fatalf("registered model count=%d, want 1", got)
 	}
 	settings := dispatcher.settings.Load()
-	if settings.policy != gatewayPolicyCloudOnly || !settings.cloudEnabled || settings.monthlyBudgetUSD != 20 {
+	if settings.policy != gatewayPolicyCloudOnly || !settings.cloudEnabled || settings.fallbackCloudModel != "cloud/deepseek/deepseek-chat" || settings.monthlyBudgetUSD != 20 {
 		t.Fatalf("settings=%+v", settings)
 	}
 	if !isAuthorizedCloudNode(settings, "10000000-0000-0000-0000-000000000001", []byte("peer-cert")) {
@@ -74,6 +74,34 @@ func TestGatewayConfigureRejectsInvalidPolicyWithoutReplacingRegistry(t *testing
 	dispatcher := newGatewayDispatcher(NewProxy(NewCodec(rwNop{})))
 	if err := dispatcher.configure(gatewayConfigureParams{Config: json.RawMessage(validCloudConfig), Policy: "unknown"}); err == nil {
 		t.Fatal("configure accepted unsupported policy")
+	}
+	if got := len(dispatcher.registry.Snapshot().Models()); got != 0 {
+		t.Fatalf("registry model count=%d after invalid configuration, want 0", got)
+	}
+}
+
+func TestGatewayConfigureRejectsLegacyPolicyWithoutReplacingRegistry(t *testing.T) {
+	dispatcher := newGatewayDispatcher(NewProxy(NewCodec(rwNop{})))
+	err := dispatcher.configure(gatewayConfigureParams{
+		Config: json.RawMessage(validCloudConfig), Policy: gatewayPolicy("prefer_cloud"),
+	})
+	if err == nil {
+		t.Fatal("configure accepted removed prefer_cloud policy")
+	}
+	if got := len(dispatcher.registry.Snapshot().Models()); got != 0 {
+		t.Fatalf("registry model count=%d after invalid configuration, want 0", got)
+	}
+}
+
+func TestGatewayConfigureRejectsMalformedFallbackCloudModel(t *testing.T) {
+	dispatcher := newGatewayDispatcher(NewProxy(NewCodec(rwNop{})))
+	var params gatewayConfigureParams
+	if err := json.Unmarshal([]byte(`{"config":`+validCloudConfig+`,"policy":"local_only","fallbackCloudModel":"https://attacker.example/model"}`), &params); err != nil {
+		t.Fatalf("decode Gateway configuration: %v", err)
+	}
+	err := dispatcher.configure(params)
+	if err == nil {
+		t.Fatal("configure accepted a fallback model that is not a canonical cloud model ID")
 	}
 	if got := len(dispatcher.registry.Snapshot().Models()); got != 0 {
 		t.Fatalf("registry model count=%d after invalid configuration, want 0", got)

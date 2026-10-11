@@ -89,6 +89,7 @@ const (
 	ServiceLMStudio ServiceKey = "lm"
 	ServiceMNN      ServiceKey = "mn"
 	ServiceLlamaCPP ServiceKey = "lc"
+	ServiceStrata   ServiceKey = "st"
 	ServiceErrors   ServiceKey = "er"
 	ServiceWorkload ServiceKey = "wl"
 	ServiceCluster  ServiceKey = "cl"
@@ -106,7 +107,7 @@ const (
 
 // serviceKeyOrder is the deterministic emit order for service ports in TXT.
 var serviceKeyOrder = []ServiceKey{
-	ServiceNodeInfo, ServiceOllama, ServiceLMStudio, ServiceMNN, ServiceLlamaCPP,
+	ServiceNodeInfo, ServiceOllama, ServiceLMStudio, ServiceMNN, ServiceLlamaCPP, ServiceStrata,
 	ServiceErrors, ServiceWorkload, ServiceCluster, ServiceEngineManager,
 	ServiceEngineControl,
 }
@@ -130,7 +131,7 @@ const (
 // Transport returns the static transport policy for the service.
 func (s ServiceKey) Transport() Transport {
 	switch s {
-	case ServiceErrors, ServiceWorkload, ServiceEngineControl:
+	case ServiceErrors, ServiceWorkload, ServiceEngineControl, ServiceStrata:
 		return TransportMTLSWhenClustered
 	case ServiceCluster:
 		return TransportSplit

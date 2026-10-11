@@ -37,6 +37,56 @@ func TestLlamaCPPProfile(t *testing.T) {
 	}
 }
 
+func TestStrataProfileDeclaresOnlyVerifiedRoutes(t *testing.T) {
+	profile, ok := profileFor("strata")
+	if !ok {
+		t.Fatal("Strata proxy profile missing")
+	}
+	if !profile.External || profile.ModelNaming != exactID {
+		t.Fatalf("Strata profile external=%v modelNaming=%v; want external exact-ID routing", profile.External, profile.ModelNaming)
+	}
+	want := []route{
+		{Path: "/v1/models", Role: roleModelListOpenAIGET},
+		{Path: "/v1/chat/completions", Role: roleInferencePOST},
+	}
+	if len(profile.Routes) != len(want) {
+		t.Fatalf("Strata routes = %+v, want %+v", profile.Routes, want)
+	}
+	for i := range want {
+		if profile.Routes[i] != want[i] {
+			t.Errorf("Strata route[%d] = %+v, want %+v", i, profile.Routes[i], want[i])
+		}
+	}
+}
+
+func TestStrataBlocksCapabilitiesWithoutModelEvidence(t *testing.T) {
+	profile, ok := profileFor("strata")
+	if !ok {
+		t.Fatal("Strata proxy profile missing")
+	}
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "ordinary chat", body: `{"model":"qwen-local","messages":[{"role":"user","content":"hi"}]}`},
+		{name: "streaming chat", body: `{"model":"qwen-local","stream":true,"messages":[{"role":"user","content":"hi"}]}`},
+		{name: "verified tool request", body: `{"model":"qwen-local","tools":[{"type":"function","function":{"name":"lookup"}}],"messages":[{"role":"user","content":"hi"}]}`},
+		{name: "image request", body: `{"model":"qwen-local","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]}]}`, want: true},
+		{name: "structured output", body: `{"model":"qwen-local","response_format":{"type":"json_schema","json_schema":{"name":"answer","schema":{"type":"object"}}},"messages":[{"role":"user","content":"hi"}]}`, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := rejectsUnverifiedCapabilities(profile, []byte(tc.body))
+			if err != nil {
+				t.Fatalf("rejectsUnverifiedCapabilities: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("rejected = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestLlamaCPPModelListRoutes(t *testing.T) {
 	profile, ok := profileFor("llamacpp")
 	if !ok {

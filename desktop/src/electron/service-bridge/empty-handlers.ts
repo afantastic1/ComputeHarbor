@@ -31,6 +31,7 @@ import { emptyInvite, parseClusterNodes, parseInvite, parseNodeIdentity } from '
 import { removeManualNodeEntry, resolveManualNodeKey } from './manual-nodes-store'
 import { loadCloudCredentials, saveCloudCredential } from '@/electron/cloud-credential-store'
 import { cloudProvidersSettingsParams, parseCloudProvidersSettings } from './cloud-providers'
+import { parseStrataProbeResult, parseStrataSettingsResult, strataSettingsParams } from './strata'
 
 type BridgeHandler<C extends WsInvokeChannel> = (
     payload?: WsInvokeRequest<C>
@@ -808,6 +809,29 @@ const EMPTY_SERVICE_BRIDGE_HANDLERS: BridgeHandlerMap = {
         )
         if (!booleanValue(result?.connected)) throw new Error('Provider connection test failed')
         return { connected: true }
+    },
+    'strata:get': async () =>
+        parseStrataSettingsResult(
+            await getModularSupervisor().callProcess('broker', 'strata:get')
+        ),
+    'strata:save': async payload => {
+        if (!payload) throw new Error('Strata settings are required')
+        return parseStrataSettingsResult(
+            await getModularSupervisor().callProcess(
+                'broker',
+                'strata:save',
+                strataSettingsParams(payload)
+            )
+        )
+    },
+    'strata:test': async payload => {
+        if (!payload) throw new Error('Strata settings are required')
+        const result = await getModularSupervisor().callProcess(
+            'broker',
+            'strata:test',
+            strataSettingsParams(payload)
+        )
+        return parseStrataProbeResult(result)
     }
 }
 

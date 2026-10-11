@@ -4,12 +4,14 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,9 +42,13 @@ func TestGatewayRequestCapabilitiesInspectStructuredImageParts(t *testing.T) {
 }
 
 func TestGatewayModelCapabilitiesDoNotInferFromNames(t *testing.T) {
-	capabilities := modelCapabilities()
-	if !capabilities["chat"] || capabilities["vision"] || capabilities["tools"] || capabilities["embeddings"] {
-		t.Errorf("capabilities for unknown models = %v, want chat only", capabilities)
+	capabilities := modelCapabilities("ollama")
+	if !capabilities["chat"] || !capabilities["streaming"] || capabilities["vision"] || capabilities["tools"] || capabilities["embeddings"] {
+		t.Errorf("capabilities for unverified engine = %v, want chat/streaming only", capabilities)
+	}
+	strataCapabilities := modelCapabilities("strata")
+	if !strataCapabilities["chat"] || !strataCapabilities["streaming"] || !strataCapabilities["tools"] || strataCapabilities["vision"] || strataCapabilities["json_schema"] {
+		t.Errorf("capabilities for verified Strata model = %v, want chat/streaming/tools", strataCapabilities)
 	}
 }
 
@@ -83,6 +89,23 @@ func TestGatewayModelDirectoryAdvertisesAutoAliases(t *testing.T) {
 	proxy := NewProxy(nil)
 	models := proxy.gatewayModels()
 	for _, alias := range []string{"auto", "auto-fast", "auto-balanced", "auto-best"} {
+		found := false
+		for _, model := range models {
+			if model.ID == alias {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("model list does not advertise %q", alias)
+		}
+	}
+}
+
+func TestGatewayModelDirectoryAdvertisesLocalAndCloudAliases(t *testing.T) {
+	proxy := NewProxy(nil)
+	models := proxy.gatewayModels()
+	for _, alias := range []string{"auto-local", "auto-cloud"} {
 		found := false
 		for _, model := range models {
 			if model.ID == alias {
@@ -487,6 +510,40 @@ func TestGatewayAutoToolsRequestDoesNotRouteToMNN(t *testing.T) {
 	}
 }
 
+func TestGatewayAutoLocalToolsRequestRoutesToVerifiedStrata(t *testing.T) {
+	var upstreamHits atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits.Add(1)
+		var payload map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode Strata request: %v", err)
+		}
+		if len(payload["tools"]) == 0 {
+			t.Error("tools field was not forwarded to Strata")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-strata-tool","choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup_status","arguments":"{\"item\":\"alpha\"}"}}]},"finish_reason":"tool_calls"}]}`)
+	}))
+	defer upstream.Close()
+
+	proxy := NewProxy(NewCodec(rwNop{}))
+	profile, _ := profileFor("strata")
+	discovery := NewDiscovery()
+	discovery.AddManual(nodeForModel(t, "strata-node", upstream.URL, "qwen-local"))
+	proxy.facades = map[string]*facade{"strata": newFacade(proxy, profile, discovery, 8082)}
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:14326/v1/chat/completions", strings.NewReader(
+		`{"model":"auto-local","messages":[{"role":"user","content":"look up alpha"}],"tools":[{"type":"function","function":{"name":"lookup_status"}}],"tool_choice":"required"}`,
+	))
+	response := httptest.NewRecorder()
+	proxy.serveGateway(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"finish_reason":"tool_calls"`) {
+		t.Fatalf("Gateway response = %d %s, want forwarded Strata tool call", response.Code, response.Body.String())
+	}
+	if got := upstreamHits.Load(); got != 1 {
+		t.Fatalf("Strata upstream hits = %d, want 1", got)
+	}
+}
+
 func TestGatewayAutoChatRequestCanRouteToMNNAndRewritesOnlyModel(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -686,6 +743,451 @@ func TestExplicitGatewayModelsRespectExclusivePolicy(t *testing.T) {
 	}
 }
 
+func TestAutoCloudUsesOnlyConfiguredFallbackModel(t *testing.T) {
+	proxy := newGatewayProxyWithTwoCloudModels(t)
+	proxy.gatewayDispatcher.settings.Store(&gatewayRoutingSettings{
+		cloudEnabled: true, policy: gatewayPolicyPreferLocal,
+		fallbackCloudModel: "cloud/provider/selected",
+	})
+	proxy.gatewayDispatcher.resolveCredential = func(string) (string, error) { return "provider-key", nil }
+
+	route, dispatchErr := proxy.gatewayDispatcher.resolve("auto-cloud", []byte(`{"messages":[]}`))
+	if dispatchErr != nil {
+		t.Fatalf("resolve auto-cloud: %+v", dispatchErr)
+	}
+	if got := route.cloudTarget.PublicID; got != "cloud/provider/selected" {
+		t.Fatalf("selected cloud model=%q, want configured fallback", got)
+	}
+}
+
+func TestCloudOnlyAutoUsesConfiguredFallbackModel(t *testing.T) {
+	proxy := newGatewayProxyWithTwoCloudModels(t)
+	proxy.gatewayDispatcher.settings.Store(&gatewayRoutingSettings{
+		cloudEnabled: true, policy: gatewayPolicyCloudOnly,
+		fallbackCloudModel: "cloud/provider/selected",
+	})
+	proxy.gatewayDispatcher.resolveCredential = func(string) (string, error) { return "provider-key", nil }
+
+	route, dispatchErr := proxy.gatewayDispatcher.resolve("auto", []byte(`{"messages":[]}`))
+	if dispatchErr != nil {
+		t.Fatalf("resolve auto in cloud-only mode: %+v", dispatchErr)
+	}
+	if got := route.cloudTarget.PublicID; got != "cloud/provider/selected" {
+		t.Fatalf("selected cloud model=%q, want configured fallback", got)
+	}
+}
+
+func TestAutoCloudRejectsLocalOnlyPolicy(t *testing.T) {
+	proxy := newGatewayProxyWithTwoCloudModels(t)
+	proxy.gatewayDispatcher.settings.Store(&gatewayRoutingSettings{
+		cloudEnabled: true, policy: gatewayPolicyLocalOnly,
+		fallbackCloudModel: "cloud/provider/selected",
+	})
+
+	_, dispatchErr := proxy.gatewayDispatcher.resolve("auto-cloud", []byte(`{"messages":[]}`))
+	if dispatchErr == nil || dispatchErr.status != http.StatusForbidden || dispatchErr.kind != "cloud_not_allowed" {
+		t.Fatalf("dispatch error=%+v, want cloud_not_allowed", dispatchErr)
+	}
+}
+
+func TestAutoLocalRejectsCloudOnlyPolicy(t *testing.T) {
+	proxy := newGatewayProxyWithTwoCloudModels(t)
+	proxy.gatewayDispatcher.settings.Store(&gatewayRoutingSettings{
+		cloudEnabled: true, policy: gatewayPolicyCloudOnly,
+		fallbackCloudModel: "cloud/provider/selected",
+	})
+
+	_, dispatchErr := proxy.gatewayDispatcher.resolve(AUTO_LOCAL_ALIAS, []byte(`{"messages":[]}`))
+	if dispatchErr == nil || dispatchErr.status != http.StatusForbidden || dispatchErr.kind != "cloud_not_allowed" {
+		t.Fatalf("dispatch error=%+v, want cloud_not_allowed", dispatchErr)
+	}
+}
+
+func TestAutoCloudRequiresConfiguredFallbackModel(t *testing.T) {
+	proxy := newGatewayProxyWithTwoCloudModels(t)
+	proxy.gatewayDispatcher.settings.Store(&gatewayRoutingSettings{
+		cloudEnabled: true, policy: gatewayPolicyCloudOnly,
+	})
+	proxy.gatewayDispatcher.resolveCredential = func(string) (string, error) { return "provider-key", nil }
+
+	_, dispatchErr := proxy.gatewayDispatcher.resolve("auto-cloud", []byte(`{"messages":[]}`))
+	if dispatchErr == nil || dispatchErr.status != http.StatusNotFound || dispatchErr.kind != "model_not_found" {
+		t.Fatalf("dispatch error=%+v, want model_not_found for missing fallback", dispatchErr)
+	}
+}
+
+func TestGatewayCloudAuthorizationCoversOnlyAliasesThatCanCallCloud(t *testing.T) {
+	tests := []struct {
+		name              string
+		policy            gatewayPolicy
+		allowPaidFallback bool
+		model             string
+		wantAuthorization bool
+	}{
+		{name: "explicit auto-cloud remains authorized when paid fallback switch is off", policy: gatewayPolicyPreferLocal, model: AUTO_CLOUD_ALIAS, wantAuthorization: true},
+		{name: "automatic prefer-local route is authorized when paid fallback is enabled", policy: gatewayPolicyPreferLocal, allowPaidFallback: true, model: AUTO_ALIAS, wantAuthorization: true},
+		{name: "automatic prefer-local route needs no cloud auth when fallback is off", policy: gatewayPolicyPreferLocal, model: AUTO_ALIAS},
+		{name: "forced local alias needs no cloud authorization", policy: gatewayPolicyPreferLocal, model: AUTO_LOCAL_ALIAS},
+		{name: "local-only auto-cloud is rejected before cloud authorization", policy: gatewayPolicyLocalOnly, model: AUTO_CLOUD_ALIAS},
+		{name: "cloud-only automatic route requires authorization", policy: gatewayPolicyCloudOnly, model: AUTO_ALIAS, wantAuthorization: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proxy := NewProxy(nil)
+			proxy.gatewayDispatcher.settings.Store(&gatewayRoutingSettings{
+				cloudEnabled: true, policy: test.policy, allowPaidFallback: test.allowPaidFallback,
+			})
+			if got := proxy.gatewayDispatcher.requiresCloudAuthorization(test.model); got != test.wantAuthorization {
+				t.Fatalf("authorization required=%v, want %v", got, test.wantAuthorization)
+			}
+		})
+	}
+}
+
+func TestPreferLocalAutoUsesCloudOnlyForNoCapacityOrEntirelyBusyLocalInventory(t *testing.T) {
+	const model = "qwen3-8b"
+	tests := []struct {
+		name              string
+		deployments       []string
+		ranks             []schedulerwire.NodeRank
+		allowPaidFallback bool
+		wantCloud         bool
+		reserveOnNode     bool
+	}{
+		{
+			name:              "all compatible deployments are busy",
+			deployments:       []string{"pc-a"},
+			ranks:             []schedulerwire.NodeRank{{ID: "pc-a", GPUPressure: schedulerwire.MaxGPUPressure, GPUPressureKnown: true}},
+			allowPaidFallback: true, wantCloud: true,
+		},
+		{
+			name:              "unknown telemetry keeps the request local",
+			deployments:       []string{"pc-a"},
+			ranks:             []schedulerwire.NodeRank{{ID: "pc-a", GPUPressure: schedulerwire.MaxGPUPressure, GPUPressureKnown: false}},
+			allowPaidFallback: true,
+		},
+		{
+			name:              "pending requests and reservations do not imply GPU saturation",
+			deployments:       []string{"pc-a"},
+			ranks:             []schedulerwire.NodeRank{{ID: "pc-a", Pending: 100, GPUPressure: 0, GPUPressureKnown: true}},
+			allowPaidFallback: true, reserveOnNode: true,
+		},
+		{
+			name:        "one idle deployment keeps the request local",
+			deployments: []string{"pc-a", "pc-b"},
+			ranks: []schedulerwire.NodeRank{
+				{ID: "pc-a", GPUPressure: schedulerwire.MaxGPUPressure, GPUPressureKnown: true},
+				{ID: "pc-b", GPUPressure: 0, GPUPressureKnown: true},
+			},
+			allowPaidFallback: true,
+		},
+		{
+			name:              "no local deployment uses configured cloud when allowed",
+			allowPaidFallback: true,
+			wantCloud:         true,
+		},
+		{
+			name:        "busy local deployment stays local when paid fallback is disabled",
+			deployments: []string{"pc-a"},
+			ranks:       []schedulerwire.NodeRank{{ID: "pc-a", GPUPressure: schedulerwire.MaxGPUPressure, GPUPressureKnown: true}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proxy := newGatewayProxyWithTwoCloudModels(t)
+			ollama, ok := profileFor("ollama")
+			if !ok {
+				t.Fatal("load Ollama profile")
+			}
+			discovery := NewDiscovery()
+			for _, nodeID := range test.deployments {
+				server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+				t.Cleanup(server.Close)
+				discovery.AddManual(nodeForModel(t, nodeID, server.URL, model))
+			}
+			proxy.facades = map[string]*facade{"ollama": newFacade(proxy, ollama, discovery, 11435)}
+			proxy.SetPrioritySnapshot(schedulerwire.Priority{
+				Generation: 1,
+				Nodes:      test.deployments,
+				Ranks:      test.ranks,
+			})
+			if test.reserveOnNode {
+				held := reservedOn(t, proxy, proxy.facades["ollama"], test.deployments[0])
+				defer proxy.releaseReservation(held)
+			}
+			proxy.gatewayDispatcher.settings.Store(&gatewayRoutingSettings{
+				cloudEnabled: true, policy: gatewayPolicyPreferLocal,
+				allowPaidFallback: test.allowPaidFallback, fallbackCloudModel: "cloud/provider/selected",
+			})
+			proxy.gatewayDispatcher.resolveCredential = func(string) (string, error) { return "provider-key", nil }
+
+			route, dispatchErr := proxy.gatewayDispatcher.resolve(AUTO_ALIAS, []byte(`{"messages":[]}`))
+			if dispatchErr != nil {
+				t.Fatalf("resolve auto: %+v", dispatchErr)
+			}
+			if test.wantCloud {
+				if got := route.cloudTarget.PublicID; got != "cloud/provider/selected" {
+					t.Fatalf("selected cloud model=%q, want configured fallback", got)
+				}
+				return
+			}
+			if route.facade == nil || route.cloudTarget.PublicID != "" {
+				t.Fatalf("route=%+v, want local engine route", route)
+			}
+		})
+	}
+}
+
+func TestPreferLocalAutoKeepsAndroidMNNCandidateLocalWhenGPUPressureIsUnknown(t *testing.T) {
+	proxy := newGatewayProxyWithTwoCloudModels(t)
+	mnn, ok := profileFor("mnn")
+	if !ok {
+		t.Fatal("load MNN profile")
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(server.Close)
+	discovery := NewDiscovery()
+	discovery.AddManual(nodeForModel(t, "android", server.URL, "qwen3-1.7b"))
+	proxy.facades = map[string]*facade{"mnn": newFacade(proxy, mnn, discovery, 14325)}
+	proxy.gatewayDispatcher.settings.Store(&gatewayRoutingSettings{
+		cloudEnabled: true, policy: gatewayPolicyPreferLocal, allowPaidFallback: true,
+		fallbackCloudModel: "cloud/provider/selected",
+	})
+	proxy.gatewayDispatcher.resolveCredential = func(string) (string, error) { return "provider-key", nil }
+
+	route, dispatchErr := proxy.gatewayDispatcher.resolve(AUTO_ALIAS, []byte(`{"messages":[]}`))
+	if dispatchErr != nil {
+		t.Fatalf("resolve auto route: %+v", dispatchErr)
+	}
+	if route.facade != proxy.facades["mnn"] || route.cloudTarget.PublicID != "" {
+		t.Fatalf("route=%+v, want local MNN execution while GPU pressure is unknown", route)
+	}
+}
+
+func TestGatewayBusyLocalInventoryCallsOnlyConfiguredCloudModel(t *testing.T) {
+	var cloudHits atomic.Int32
+	cloudServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cloudHits.Add(1)
+		var payload struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode Cloud request: %v", err)
+		}
+		if payload.Model != "selected-upstream" {
+			t.Errorf("Cloud upstream model=%q, want selected-upstream", payload.Model)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-1","model":"selected-upstream","choices":[],"usage":{"prompt_tokens":3,"completion_tokens":2}}`)
+	}))
+	t.Cleanup(cloudServer.Close)
+
+	var localHits atomic.Int32
+	localServer := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			localHits.Add(1)
+		}
+	}))
+	t.Cleanup(localServer.Close)
+
+	transport := &workloadRecordingTransport{}
+	proxy := NewProxy(NewCodec(transport))
+	config := strings.Replace(
+		`{"schema_version":1,"providers":[{"id":"provider","protocol":"openai_chat_completions","base_url":"https://api.example.com","auth_ref":"user-vault:provider","enabled":true,"models":[{"public_id":"cloud/provider/first","upstream_id":"first-upstream","capabilities":["chat","streaming"]},{"public_id":"cloud/provider/selected","upstream_id":"selected-upstream","capabilities":["chat","streaming"]}]}]}`,
+		"https://api.example.com", cloudServer.URL, 1,
+	)
+	if err := proxy.gatewayDispatcher.registry.ReplaceJSON([]byte(config), cloudConfigOptions{allowLoopbackURL: true}); err != nil {
+		t.Fatalf("configure Cloud Registry: %v", err)
+	}
+	proxy.gatewayDispatcher.client = newCloudHTTPClient(cloudHTTPOptions{allowLoopback: true})
+	proxy.gatewayDispatcher.resolveCredential = func(string) (string, error) { return "provider-key", nil }
+	proxy.gatewayDispatcher.setClientToken("local-client-token-12345678901234567890")
+	budget, err := newCloudBudgetLedger(filepath.Join(t.TempDir(), "budget.json"))
+	if err != nil {
+		t.Fatalf("create Cloud budget ledger: %v", err)
+	}
+	proxy.gatewayDispatcher.budget = budget
+	proxy.gatewayDispatcher.settings.Store(&gatewayRoutingSettings{
+		cloudEnabled: true, policy: gatewayPolicyPreferLocal, allowPaidFallback: true,
+		fallbackCloudModel: "cloud/provider/selected",
+		monthlyBudgetUSD:   5, perRequestMaxEstimatedCostUSD: 1,
+	})
+
+	ollama, ok := profileFor("ollama")
+	if !ok {
+		t.Fatal("load Ollama profile")
+	}
+	discovery := NewDiscovery()
+	discovery.AddManual(nodeForModel(t, "pc", localServer.URL, "qwen3-8b"))
+	proxy.facades = map[string]*facade{"ollama": newFacade(proxy, ollama, discovery, 11435)}
+	proxy.SetPrioritySnapshot(schedulerwire.Priority{
+		Generation: 1,
+		Nodes:      []string{"pc"},
+		Ranks:      []schedulerwire.NodeRank{{ID: "pc", GPUPressure: schedulerwire.MaxGPUPressure, GPUPressureKnown: true}},
+	})
+
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:14326/v1/chat/completions", strings.NewReader(
+		`{"model":"auto-best","messages":[{"role":"user","content":"hello"}]}`,
+	))
+	request.Header.Set("Authorization", "Bearer local-client-token-12345678901234567890")
+	response := httptest.NewRecorder()
+	proxy.serveGateway(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("Gateway response=%d %s", response.Code, response.Body.String())
+	}
+	if got := cloudHits.Load(); got != 1 {
+		t.Fatalf("Cloud requests=%d, want one configured fallback request", got)
+	}
+	if got := localHits.Load(); got != 0 {
+		t.Fatalf("local requests=%d, want no local dispatch after saturated selection", got)
+	}
+
+	transport.mu.Lock()
+	lines := bytes.Split(bytes.TrimSpace(transport.writes.Bytes()), []byte{'\n'})
+	transport.mu.Unlock()
+	var methods []string
+	for _, line := range lines {
+		var notification struct {
+			Method string `json:"method"`
+		}
+		if err := json.Unmarshal(line, &notification); err != nil {
+			t.Fatalf("decode Cloud workload notification: %v", err)
+		}
+		methods = append(methods, notification.Method)
+	}
+	if want := []string{workloadSubmittedMethod, workloadStartedMethod, workloadCompletedMethod}; !reflect.DeepEqual(methods, want) {
+		t.Fatalf("Cloud workload lifecycle=%v, want %v", methods, want)
+	}
+}
+
+func newGatewayProxyWithTwoCloudModels(t *testing.T) *Proxy {
+	t.Helper()
+	proxy := NewProxy(nil)
+	config := `{"schema_version":1,"providers":[{"id":"provider","protocol":"openai_chat_completions","base_url":"https://api.example.com","auth_ref":"user-vault:provider","enabled":true,"models":[{"public_id":"cloud/provider/first","upstream_id":"first","capabilities":["chat","streaming"]},{"public_id":"cloud/provider/selected","upstream_id":"selected","capabilities":["chat","streaming"]}]}]}`
+	if err := proxy.gatewayDispatcher.registry.ReplaceJSON([]byte(config), cloudConfigOptions{}); err != nil {
+		t.Fatalf("load cloud provider configuration: %v", err)
+	}
+	return proxy
+}
+
+func TestCloudFallbackBudgetPreflightFailureUsesLocalRouteWithoutCallingProvider(t *testing.T) {
+	var localHits atomic.Int32
+	localServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		localHits.Add(1)
+		var payload struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode local request: %v", err)
+		}
+		if payload.Model != "qwen3-8b" {
+			t.Errorf("local model=%q, want qwen3-8b", payload.Model)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"message":{"content":"local"}}`)
+	}))
+	t.Cleanup(localServer.Close)
+
+	proxy := newGatewayProxyWithTwoCloudModels(t)
+	proxy.codec = NewCodec(rwNop{})
+	ollama, ok := profileFor("ollama")
+	if !ok {
+		t.Fatal("load Ollama profile")
+	}
+	discovery := NewDiscovery()
+	discovery.AddManual(nodeForModel(t, "pc", localServer.URL, "qwen3-8b"))
+	proxy.facades = map[string]*facade{"ollama": newFacade(proxy, ollama, discovery, 11435)}
+	proxy.gatewayDispatcher.settings.Store(&gatewayRoutingSettings{
+		cloudEnabled: true, policy: gatewayPolicyPreferLocal,
+		fallbackCloudModel: "cloud/provider/selected",
+	})
+	proxy.gatewayDispatcher.resolveCredential = func(string) (string, error) { return "provider-key", nil }
+
+	traits := gatewayRequestTraits{model: AUTO_ALIAS, capabilities: map[string]bool{"chat": true}}
+	localRoute, dispatchErr := proxy.gatewayDispatcher.resolveLocalAuto(AUTO_BALANCED_ALIAS, traits, nil)
+	if dispatchErr != nil {
+		t.Fatalf("resolve local route: %+v", dispatchErr)
+	}
+	cloudRoute, dispatchErr := proxy.gatewayDispatcher.resolveConfiguredCloud(proxy.gatewayDispatcher.settings.Load(), traits)
+	if dispatchErr != nil {
+		t.Fatalf("resolve configured Cloud route: %+v", dispatchErr)
+	}
+	cloudRoute.localFallback = &localRoute
+
+	body := []byte(`{"model":"auto","messages":[]}`)
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:14326/v1/chat/completions", strings.NewReader(string(body)))
+	response := httptest.NewRecorder()
+	proxy.gatewayDispatcher.dispatchCloud(response, request, body, cloudRoute)
+	if response.Code != http.StatusOK || localHits.Load() != 1 {
+		t.Fatalf("response=%d local hits=%d body=%s, want one local response", response.Code, localHits.Load(), response.Body.String())
+	}
+}
+
+func TestCloudProviderFailureAfterRequestStartDoesNotRetryLocally(t *testing.T) {
+	var cloudHits atomic.Int32
+	cloudServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		cloudHits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(cloudServer.Close)
+
+	var localHits atomic.Int32
+	localServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		localHits.Add(1)
+	}))
+	t.Cleanup(localServer.Close)
+
+	proxy := NewProxy(NewCodec(rwNop{}))
+	config := strings.Replace(validCloudConfig, "https://api.deepseek.com", cloudServer.URL, 1)
+	if err := proxy.gatewayDispatcher.registry.ReplaceJSON([]byte(config), cloudConfigOptions{allowLoopbackURL: true}); err != nil {
+		t.Fatalf("configure Cloud Registry: %v", err)
+	}
+	proxy.gatewayDispatcher.client = newCloudHTTPClient(cloudHTTPOptions{allowLoopback: true})
+	proxy.gatewayDispatcher.resolveCredential = func(string) (string, error) { return "provider-key", nil }
+	budget, err := newCloudBudgetLedger(filepath.Join(t.TempDir(), "budget.json"))
+	if err != nil {
+		t.Fatalf("create Cloud budget ledger: %v", err)
+	}
+	proxy.gatewayDispatcher.budget = budget
+	proxy.gatewayDispatcher.settings.Store(&gatewayRoutingSettings{
+		cloudEnabled: true, policy: gatewayPolicyPreferLocal,
+		monthlyBudgetUSD: 5, perRequestMaxEstimatedCostUSD: 1,
+	})
+
+	ollama, ok := profileFor("ollama")
+	if !ok {
+		t.Fatal("load Ollama profile")
+	}
+	discovery := NewDiscovery()
+	discovery.AddManual(nodeForModel(t, "pc", localServer.URL, "qwen3-8b"))
+	localFacade := newFacade(proxy, ollama, discovery, 11435)
+	target, ok := proxy.gatewayDispatcher.registry.Snapshot().Resolve("cloud/deepseek/deepseek-chat")
+	if !ok {
+		t.Fatal("resolve configured Cloud model")
+	}
+	provider, ok := proxy.gatewayDispatcher.registry.Snapshot().provider(target.ProviderID)
+	if !ok {
+		t.Fatal("resolve configured Cloud provider")
+	}
+	route := gatewayRoute{
+		cloudTarget: target, provider: provider, requestModel: AUTO_ALIAS,
+		localFallback: &gatewayRoute{facade: localFacade, upstreamModel: "qwen3-8b"},
+	}
+	body := []byte(`{"model":"auto","messages":[]}`)
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:14326/v1/chat/completions", strings.NewReader(string(body)))
+	response := httptest.NewRecorder()
+	proxy.gatewayDispatcher.dispatchCloud(response, request, body, route)
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("Gateway response=%d %s, want Provider failure", response.Code, response.Body.String())
+	}
+	if got := cloudHits.Load(); got != 1 {
+		t.Fatalf("Cloud requests=%d, want one request", got)
+	}
+	if got := localHits.Load(); got != 0 {
+		t.Fatalf("local requests=%d, want no replay after Provider request started", got)
+	}
+}
+
 func TestGatewayRoutesAuthorizedCloudModelAndMapsPublicModelID(t *testing.T) {
 	var upstreamHits atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -848,7 +1350,8 @@ func TestGatewayPaidCloudFallbackRequiresOptInAndBudget(t *testing.T) {
 	proxy.gatewayDispatcher.budget = budget
 	proxy.gatewayDispatcher.settings.Store(&gatewayRoutingSettings{
 		cloudEnabled: true, policy: gatewayPolicyPreferLocal,
-		monthlyBudgetUSD: 2, perRequestMaxEstimatedCostUSD: 0.5,
+		fallbackCloudModel: "cloud/deepseek/deepseek-chat",
+		monthlyBudgetUSD:   2, perRequestMaxEstimatedCostUSD: 0.5,
 	})
 	request := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:14326/v1/chat/completions", strings.NewReader(

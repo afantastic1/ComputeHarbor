@@ -32,9 +32,11 @@ const (
 	AUTO_FAST_ALIAS     = modelselection.AutoFastAlias
 	AUTO_BALANCED_ALIAS = modelselection.AutoBalancedAlias
 	AUTO_BEST_ALIAS     = modelselection.AutoBestAlias
+	AUTO_LOCAL_ALIAS    = "auto-local"
+	AUTO_CLOUD_ALIAS    = "auto-cloud"
 )
 
-var autoAliases = []string{AUTO_ALIAS, AUTO_FAST_ALIAS, AUTO_BALANCED_ALIAS, AUTO_BEST_ALIAS}
+var autoAliases = []string{AUTO_ALIAS, AUTO_FAST_ALIAS, AUTO_BALANCED_ALIAS, AUTO_BEST_ALIAS, AUTO_LOCAL_ALIAS, AUTO_CLOUD_ALIAS}
 var gatewayParameterPattern = regexp.MustCompile(`(?i)([0-9]+(?:\.[0-9]+)?)\s*[- ]?b([^a-z]|$)`)
 
 type gatewayModel struct {
@@ -77,7 +79,7 @@ func (p *Proxy) gatewayInventory() []modelselection.RuntimeModel {
 				candidate.Model = modelselection.ModelDescriptor{
 					LogicalID: engine + ":" + model, EngineModelID: model,
 					Family: modelFamily(model), ParameterCount: modelParameterCount(model),
-					Capabilities: modelCapabilities(), Compatible: true,
+					Capabilities: modelCapabilities(engine), Compatible: true,
 				}
 				if candidate.Model.ParameterCount > 0 {
 					candidate.Model.EstimatedMemoryBytes = candidate.Model.ParameterCount * 2
@@ -130,11 +132,16 @@ func modelFamily(model string) string {
 	return strings.ToLower(model)
 }
 
-func modelCapabilities() map[string]bool {
+func modelCapabilities(engine string) map[string]bool {
 	// Discovery currently provides model IDs only. Do not infer optional
 	// capabilities from names. Local facades expose basic chat and SSE.
 	// 没有可靠能力信息，就不宣称模型支持Tool Calling
-	return map[string]bool{"chat": true, "streaming": true}
+	capabilities := map[string]bool{"chat": true, "streaming": true}
+	if engine == "strata" {
+		// Verified against the configured local Strata model's OpenAI endpoint.
+		capabilities["tools"] = true
+	}
+	return capabilities
 }
 
 func requiredGatewayCapabilities(body []byte) map[string]bool {

@@ -54,6 +54,20 @@ class BrokerSessionTest {
     }
 
     @Test
+    fun brokerCommandIncludesNodeInfoServerPath() {
+        val (session, root) = session(listOf("ollama", "lmstudio", "mnn"))
+        try {
+            val arguments = session.commandArguments()
+            val nodeInfoFlag = arguments.indexOf("--node-info-path")
+
+            assertTrue("broker command must set --node-info-path", nodeInfoFlag >= 0)
+            assertEquals(root.resolve("libnvpair_node_info.so").absolutePath, arguments[nodeInfoFlag + 1])
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun brokerCommandExcludesMnnWhenLocalMnnDidNotStart() {
         val (session, root) = session(listOf("ollama", "lmstudio"))
         try {
@@ -98,6 +112,7 @@ class BrokerSessionTest {
             "libnvpair_workload_manager.so",
             "libnvpair_errors.so",
             "libnvpair_engine_manager.so",
+            "libnvpair_node_info.so",
         ).forEach { root.resolve(it).createNewFile() }
         return BrokerSession(
             binaries = NativeBinaryRegistry(root),

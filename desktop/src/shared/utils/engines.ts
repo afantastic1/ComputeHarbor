@@ -4,6 +4,8 @@
 import { EngineManagerNames, EngineTypes, ModelExpiries } from '@/shared/constants/engines'
 import {
     EngineManagerName,
+    ManagedEngineManagerName,
+    ManagedEngineType,
     EngineModels,
     EngineStatusData,
     EngineType,
@@ -21,7 +23,14 @@ export function isEngineType(v: string | undefined): v is EngineType {
     return typeof v === 'string' && ENGINE_TYPE_SET.has(v)
 }
 
+/** Runtime guard for engine-manager owned lifecycle and model operations. */
+export function isManagedEngineType(v: string | undefined): v is ManagedEngineType {
+    return isEngineType(v) && v !== 'strata'
+}
+
 /** Spell an `EngineType` the way `nvpair-engine-manager` does on the wire. */
+export function engineManagerName(engine: ManagedEngineType): ManagedEngineManagerName
+export function engineManagerName(engine: EngineType): EngineManagerName
 export function engineManagerName(engine: EngineType): EngineManagerName {
     return EngineManagerNames[engine]
 }

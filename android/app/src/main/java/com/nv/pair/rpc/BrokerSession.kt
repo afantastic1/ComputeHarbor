@@ -133,6 +133,7 @@ class BrokerSession(
         return listOf(
             broker.absolutePath,
             "--scanner-path", scanner.absolutePath,
+            "--node-info-path", binaries.nodeInfo().absolutePath,
             "--settings-path", binaries.settings().absolutePath,
             "--cluster-manager-path", binaries.clusterManager().absolutePath,
             "--proxy-path", binaries.proxy().absolutePath,

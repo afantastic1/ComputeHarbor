@@ -29,7 +29,7 @@ import type {
     EngineInitialState,
     EngineStatePatch
 } from '@/shared/types/engine-api'
-import type { EngineProgress, EngineType } from '@/shared/types/engines'
+import type { EngineProgress, ManagedEngineType } from '@/shared/types/engines'
 import type {
     EngineSettingsTarget,
     EngineSettingsRequest,
@@ -43,6 +43,7 @@ import type { NodeItem } from '@/shared/types/nodes'
 import type { NodeItemMetrics } from '@/shared/types/metrics'
 import type { Workload } from '@/shared/types/workloads'
 import type { CloudProvidersSettings } from '@/shared/types/cloud-providers'
+import type { StrataProbeResult, StrataSettings, StrataSettingsResult } from '@/shared/types/strata'
 import type {
     AvailableNode,
     ClusterIdentityPayload,
@@ -104,7 +105,7 @@ export interface WsInvokeChannelMap {
     'engines:apply-settings': { request: EngineSettingsRequest; response: EngineSettingsReceipt }
     'engine:command': { request: EngineCommandPayload; response: null }
     'engine:search-hub': {
-        request: { engineType: EngineType; query?: string }
+        request: { engineType: ManagedEngineType; query?: string }
         response: EngineHubSearchResponse
     }
 
@@ -124,6 +125,10 @@ export interface WsInvokeChannelMap {
         response: { credentialConfigured: boolean }
     }
     'cloudproviders:test': { request: { providerId: string }; response: { connected: boolean } }
+
+    'strata:get': { request: void; response: StrataSettingsResult }
+    'strata:save': { request: StrataSettings; response: StrataSettingsResult }
+    'strata:test': { request: StrataSettings; response: StrataProbeResult }
 }
 
 export type WsInvokeChannel = keyof WsInvokeChannelMap

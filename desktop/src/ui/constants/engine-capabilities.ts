@@ -61,5 +61,18 @@ export const EngineCapabilities: Record<EngineType, EngineCaps> = {
             label: 'llama.cpp',
             url: 'https://huggingface.co/models?library=gguf'
         }
+    },
+    strata: {
+        hasExpiry: false,
+        hasEject: false,
+        hasInstall: [],
+        hasEnginePort: false,
+        hasInstallPath: false,
+        hasProxyWebUI: false,
+        hasPreferredNode: false,
+        hasCrashAlert: false,
+        hasModelSearchOnlyWhenRunning: false,
+        modelOpsWhenStopped: false,
+        hasDeleteModel: false
     }
 }

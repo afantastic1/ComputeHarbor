@@ -7,7 +7,7 @@
  * Commands are fire-and-forget (void). Errors arrive via errors:update push events.
  * All state flows via push events, not command responses.
  */
-import type { EngineStatusData, EngineType } from '@/shared/types/engines'
+import type { EngineStatusData, EngineType, ManagedEngineType } from '@/shared/types/engines'
 import type { EngineModels, EngineProgress, EngineUpdateAvailable } from '@/shared/types/engines'
 
 /**
@@ -69,7 +69,7 @@ export type EngineCommandType =
 /** Payload for engine commands sent from the UI. */
 export interface EngineCommandPayload {
     command: EngineCommandType
-    engineType: EngineType
+    engineType: ManagedEngineType
     nodeId: string
     model?: string
     expiry?: string

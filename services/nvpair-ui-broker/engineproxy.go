@@ -48,6 +48,10 @@ const (
 	// hostedEngine — the parent application owns lifecycle and engine-manager
 	// only probes/queries the endpoint. MNN on Android.
 	hostedEngine
+
+	// externalEngine — the user owns the process and PAIR only probes and
+	// proxies its loopback API. It is never sent to engine-manager lifecycle RPCs.
+	externalEngine
 )
 
 // engineProxyProfile is everything the broker needs to supervise one engine's
@@ -171,6 +175,7 @@ func buildEngineProxyProfiles() []engineProxyProfile {
 		"lmstudio": {Ownership: managedEngine, HealthProbePath: "/v1/models"},
 		"mnn":      {Ownership: hostedEngine, HealthProbePath: "/healthz"},
 		"llamacpp": {Ownership: managedEngine, HealthProbePath: "/health"},
+		"strata":   {Ownership: externalEngine, HealthProbePath: "/v1/models"},
 	}
 	out := make([]engineProxyProfile, 0, len(engines.All()))
 	for _, e := range engines.All() {

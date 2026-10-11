@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -138,5 +139,81 @@ func TestLocalReverseProxyUsesSharedPlainTransport(t *testing.T) {
 	}
 	if tr != shared {
 		t.Fatal("ingress reverse proxy did not use the shared plain Transport")
+	}
+}
+
+func TestStrataLocalIngressUsesConfiguredLoopbackAPIKey(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer configured-key" {
+			t.Errorf("Authorization = %q, want configured Strata credential", got)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	parsed, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("parse upstream URL: %v", err)
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil {
+		t.Fatalf("parse upstream port: %v", err)
+	}
+	profile, ok := profileFor("strata")
+	if !ok {
+		t.Fatal("Strata profile missing")
+	}
+	proxy := testProxy(profile, NewDiscovery(), profile.StandalonePort)
+	facade := proxy.soleFacade()
+	if err := facade.setLocalBackend(localBackend{
+		Engine: "strata", Host: "127.0.0.1", Port: port, Healthy: true, APIKey: "configured-key",
+	}); err != nil {
+		t.Fatalf("set local Strata backend: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	target, ok := facade.localBackendTarget()
+	if !ok {
+		t.Fatal("configured Strata backend was not available")
+	}
+	facade.reverseProxyToLocal(rec, req, target)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("local ingress status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+}
+
+func TestStrataModelListFanoutUsesConfiguredLoopbackAPIKey(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer configured-key" {
+			t.Errorf("Authorization = %q, want configured Strata credential", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"qwen-local","object":"model"}]}`))
+	}))
+	defer upstream.Close()
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("parse upstream URL: %v", err)
+	}
+	profile, ok := profileFor("strata")
+	if !ok {
+		t.Fatal("Strata profile missing")
+	}
+	proxy := testProxy(profile, NewDiscovery(), profile.StandalonePort)
+	modelListRoute, ok := profile.routeFor(http.MethodGet, "/v1/models")
+	if !ok {
+		t.Fatal("Strata model-list route missing")
+	}
+	recorder := httptest.NewRecorder()
+	status, err := proxy.soleFacade().serveModelList(
+		recorder,
+		httptest.NewRequest(http.MethodGet, "/v1/models", nil),
+		modelListRoute,
+		[]candidate{{id: "self", url: target, localAPIKey: "configured-key"}},
+	)
+	if err != nil {
+		t.Fatalf("serve Strata model list: %v", err)
+	}
+	if status != http.StatusOK || recorder.Code != http.StatusOK {
+		t.Fatalf("model-list status = %d / %d, want 200", status, recorder.Code)
 	}
 }

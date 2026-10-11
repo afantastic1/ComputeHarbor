@@ -26,12 +26,11 @@ function booleanValue(value: JsonValue | undefined): boolean {
 }
 
 function isGatewayPolicy(value: string): value is CloudProvidersSettings['policy'] {
-    return (
-        value === 'local_only' ||
-        value === 'cloud_only' ||
-        value === 'prefer_local' ||
-        value === 'prefer_cloud'
-    )
+    return value === 'local_only' || value === 'cloud_only' || value === 'prefer_local'
+}
+
+function isFallbackCloudModel(value: string): boolean {
+    return /^cloud(?:\/[A-Za-z0-9][A-Za-z0-9._~-]{0,127}){2,}$/.test(value)
 }
 
 function parseProvider(value: JsonValue): CloudProviderConfig | null {
@@ -84,14 +83,19 @@ export function parseCloudProvidersSettings(value: JsonValue | undefined): Cloud
     const settings = objectValue(value)
     const config = objectValue(settings?.config)
     const providersValue = config?.providers
-    const policy = stringValue(settings?.policy)
+    const storedPolicy = stringValue(settings?.policy)
+    const policyMigrationRequired =
+        booleanValue(settings?.policyMigrationRequired) || storedPolicy === 'prefer_cloud'
+    const policy = storedPolicy === 'prefer_cloud' ? 'local_only' : storedPolicy
+    const fallbackCloudModel = stringValue(settings?.fallbackCloudModel)
     const authorizedNodesValue = settings?.authorizedNodes
     if (
         settings?.schema_version !== 1 ||
         config?.schema_version !== 1 ||
         !Array.isArray(providersValue) ||
         (authorizedNodesValue !== undefined && !Array.isArray(authorizedNodesValue)) ||
-        !isGatewayPolicy(policy)
+        !isGatewayPolicy(policy) ||
+        (fallbackCloudModel !== '' && !isFallbackCloudModel(fallbackCloudModel))
     ) {
         throw new Error('Cloud provider settings returned an invalid response')
     }
@@ -118,6 +122,8 @@ export function parseCloudProvidersSettings(value: JsonValue | undefined): Cloud
         config: { schema_version: 1, providers },
         cloudEnabled: booleanValue(settings.cloudEnabled),
         policy,
+        policyMigrationRequired,
+        fallbackCloudModel,
         allowPaidFallback: booleanValue(settings.allowPaidFallback),
         monthlyBudgetUSD: numberValue(settings.monthlyBudgetUSD),
         perRequestMaxEstimatedCostUSD: numberValue(settings.perRequestMaxEstimatedCostUSD),
@@ -147,6 +153,8 @@ export function cloudProvidersSettingsParams(settings: CloudProvidersSettings): 
         config,
         cloudEnabled: settings.cloudEnabled,
         policy: settings.policy,
+        policyMigrationRequired: settings.policyMigrationRequired,
+        fallbackCloudModel: settings.fallbackCloudModel,
         allowPaidFallback: settings.allowPaidFallback,
         monthlyBudgetUSD: settings.monthlyBudgetUSD,
         perRequestMaxEstimatedCostUSD: settings.perRequestMaxEstimatedCostUSD,

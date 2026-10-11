@@ -23,7 +23,7 @@ func TestOllamaIsPreparedFirst(t *testing.T) {
 
 func TestNames(t *testing.T) {
 	got := Names()
-	want := []string{"ollama", "lmstudio", "mnn", "llamacpp"}
+	want := []string{"ollama", "lmstudio", "mnn", "llamacpp", "strata"}
 	if len(got) != len(want) {
 		t.Fatalf("Names() = %v, want %v", got, want)
 	}
@@ -44,6 +44,16 @@ func TestMNNIdentity(t *testing.T) {
 	}
 	if !mnn.SupportsPlatform("android/arm64") || mnn.SupportsPlatform("windows/amd64") {
 		t.Fatal("MNN facade platform support does not match its manifest platform")
+	}
+}
+
+func TestStrataIdentityIsExternallyManaged(t *testing.T) {
+	strata, ok := ByName("strata")
+	if !ok {
+		t.Fatal("strata engine identity missing")
+	}
+	if strata.DisplayName != "Strata" || strata.DiscoveryService != noderec.ServiceStrata || strata.FacadePort != 8082 || !strata.External {
+		t.Fatalf("Strata identity = %+v, want external Strata facade on discovery service strata at port 8082", strata)
 	}
 }
 

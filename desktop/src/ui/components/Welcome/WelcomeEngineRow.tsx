@@ -3,14 +3,14 @@
 
 import { Button, Flex, Stack, Switch, Text } from '@nvidia/foundations-react-core'
 import { OpenInNew } from '@/ui/components/icons'
-import { type EngineType } from '@/shared/types/engines'
+import { type ManagedEngineType } from '@/shared/types/engines'
 import { EngineDefaultLinks, EngineDisplayNames } from '@/shared/constants/engines'
 import { DismissibleTooltip } from '@/ui/components/DismissibleTooltip/DismissibleTooltip'
 import { useEngineProgressStore } from '@/ui/stores/engine-progress.store'
 import { engineProgressKey } from '@/shared/utils/engine-progress'
 
 interface WelcomeEngineRowProps {
-    engineType: EngineType
+    engineType: ManagedEngineType
     nodeId: string
     checked: boolean
     installing: boolean

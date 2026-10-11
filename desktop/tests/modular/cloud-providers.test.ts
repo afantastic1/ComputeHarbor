@@ -63,7 +63,8 @@ describe('cloud provider settings bridge', () => {
             schema_version: 1,
             config: { schema_version: 1, providers: [] },
             cloudEnabled: true,
-            policy: 'prefer_cloud',
+            policy: 'prefer_local',
+            fallbackCloudModel: 'cloud/provider-a/chat',
             allowPaidFallback: false,
             monthlyBudgetUSD: 10,
             perRequestMaxEstimatedCostUSD: 1,
@@ -78,5 +79,25 @@ describe('cloud provider settings bridge', () => {
         expect(cloudProvidersSettingsParams(settings).authorizedNodes).toEqual(
             settings.authorizedNodes
         )
+        expect(cloudProvidersSettingsParams(settings).fallbackCloudModel).toBe(
+            'cloud/provider-a/chat'
+        )
+    })
+
+    it('safely migrates legacy prefer-cloud settings and missing fallback model', () => {
+        const settings = parseCloudProvidersSettings({
+            schema_version: 1,
+            config: { schema_version: 1, providers: [] },
+            cloudEnabled: true,
+            policy: 'prefer_cloud',
+            allowPaidFallback: true,
+            monthlyBudgetUSD: 10,
+            perRequestMaxEstimatedCostUSD: 1,
+            authorizedNodes: []
+        })
+
+        expect(settings.policy).toBe('local_only')
+        expect(settings.policyMigrationRequired).toBe(true)
+        expect(settings.fallbackCloudModel).toBe('')
     })
 })

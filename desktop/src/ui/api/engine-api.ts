@@ -14,7 +14,7 @@ import type {
     EngineStatePatch,
     EngineCommandPayload
 } from '@/shared/types/engine-api'
-import type { EngineProgress, EngineType } from '@/shared/types/engines'
+import type { EngineProgress, ManagedEngineType } from '@/shared/types/engines'
 import { usePendingActionsStore } from '@/ui/stores/pending-actions.store'
 import type {
     EngineSettingsTarget,
@@ -47,23 +47,23 @@ export interface IEngineApi {
     getInitialState(): Promise<EngineInitialState>
 
     /** Start or stop an engine process on a node. */
-    toggle(engineType: EngineType, nodeId: string): void
+    toggle(engineType: ManagedEngineType, nodeId: string): void
     /** Install an engine on a node. */
-    install(engineType: EngineType, nodeId: string): void
+    install(engineType: ManagedEngineType, nodeId: string): void
     /** Uninstall an engine from a node without removing downloaded models. */
-    uninstall(engineType: EngineType, nodeId: string): void
+    uninstall(engineType: ManagedEngineType, nodeId: string): void
     /** Pull (download) a model on a node. */
-    pullModel(engineType: EngineType, nodeId: string, model: string): void
+    pullModel(engineType: ManagedEngineType, nodeId: string, model: string): void
     /** Load a model into memory on a node. */
-    loadModel(engineType: EngineType, nodeId: string, model: string): void
+    loadModel(engineType: ManagedEngineType, nodeId: string, model: string): void
     /** Unload a model from memory on a node. */
-    unloadModel(engineType: EngineType, nodeId: string, model: string): void
+    unloadModel(engineType: ManagedEngineType, nodeId: string, model: string): void
     /** Delete a downloaded model from a node. */
-    deleteModel(engineType: EngineType, nodeId: string, model: string): void
+    deleteModel(engineType: ManagedEngineType, nodeId: string, model: string): void
     /** Set the model keep-alive expiry duration on a node. */
-    setModelExpiry(engineType: EngineType, nodeId: string, model: string, expiry: string): void
+    setModelExpiry(engineType: ManagedEngineType, nodeId: string, model: string, expiry: string): void
     /** Load an engine catalog or explicitly search its upstream registry. */
-    searchHub(engineType: EngineType, query?: string): Promise<EngineHubSearchResponse>
+    searchHub(engineType: ManagedEngineType, query?: string): Promise<EngineHubSearchResponse>
 
     /** Durable engine state changed. Prefer this for new renderer state. */
     onStateChanged(callback: (patch: EngineStatePatch) => void): () => void
@@ -72,7 +72,7 @@ export interface IEngineApi {
     /** An engine progress entry was removed (operation completed). */
     onProgressRemove(callback: (key: string) => void): () => void
     /** Trigger a one-click update (managed installs only). Fire-and-forget. */
-    update(engineType: EngineType, nodeId: string): void
+    update(engineType: ManagedEngineType, nodeId: string): void
 }
 
 function fireCommand(transport: ServiceTransport, payload: EngineCommandPayload): void {

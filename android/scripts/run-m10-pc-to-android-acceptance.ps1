@@ -389,7 +389,7 @@ try {
         }
         $brokerProcess.Dispose()
     }
-    if ($adb -and $Serial) { & $adb -s $Serial shell rm -rf $deviceStageRunRoot | Out-Null }
+    if ($adb -and $Serial) { & $adb -s $Serial shell rm -rf $deviceStage | Out-Null }
     & $adb -s $Serial shell pm path com.nv.pair | Out-Null
     if ($LASTEXITCODE -eq 0) { & $adb -s $Serial shell run-as com.nv.pair rm -rf $modelRelativePath | Out-Null }
     $resolvedTempRoot = [System.IO.Path]::GetFullPath($tempRoot)

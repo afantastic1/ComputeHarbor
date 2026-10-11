@@ -14,12 +14,15 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 
 	"nvpair-shared/appdir"
 )
 
 const cloudProvidersStoreName = "cloud-providers.json"
+
+var fallbackCloudModelPattern = regexp.MustCompile(`^cloud(?:/[A-Za-z0-9][A-Za-z0-9._~-]{0,127}){2,}$`)
 
 type cloudNodeAuthorization struct {
 	NodeUUID        string `json:"nodeUuid"`
@@ -31,6 +34,8 @@ type cloudProvidersSettings struct {
 	Config                        json.RawMessage          `json:"config"`
 	CloudEnabled                  bool                     `json:"cloudEnabled"`
 	Policy                        string                   `json:"policy"`
+	PolicyMigrationRequired       bool                     `json:"policyMigrationRequired,omitempty"`
+	FallbackCloudModel            string                   `json:"fallbackCloudModel"`
 	AllowPaidFallback             bool                     `json:"allowPaidFallback"`
 	MonthlyBudgetUSD              float64                  `json:"monthlyBudgetUSD"`
 	PerRequestMaxEstimatedCostUSD float64                  `json:"perRequestMaxEstimatedCostUSD"`
@@ -65,7 +70,35 @@ func loadCloudProvidersSettings() (cloudProvidersSettings, error) {
 	if settings.AuthorizedNodes == nil {
 		settings.AuthorizedNodes = []cloudNodeAuthorization{}
 	}
+	settings.PolicyMigrationRequired = false
+	if settings.Policy == "prefer_cloud" {
+		settings.Policy = "local_only"
+		settings.PolicyMigrationRequired = true
+	}
+	if !validCloudRoutingPolicy(settings.Policy) || !validFallbackCloudModel(settings.FallbackCloudModel) {
+		return cloudProvidersSettings{}, fmt.Errorf("cloud provider settings are invalid")
+	}
 	return settings, nil
+}
+
+func validCloudProvidersSettings(settings cloudProvidersSettings) bool {
+	if settings.PolicyMigrationRequired || !validCloudRoutingPolicy(settings.Policy) {
+		return false
+	}
+	return validFallbackCloudModel(settings.FallbackCloudModel)
+}
+
+func validFallbackCloudModel(model string) bool {
+	return model == "" || fallbackCloudModelPattern.MatchString(model)
+}
+
+func validCloudRoutingPolicy(policy string) bool {
+	switch policy {
+	case "local_only", "cloud_only", "prefer_local":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseCloudProvidersSettings(data []byte) (cloudProvidersSettings, error) {
@@ -134,7 +167,7 @@ func (b *Broker) handleCloudProvidersRPC(msg *Message) {
 	}
 	if msg.Method == "cloudproviders:save" {
 		settings, err := parseCloudProvidersSettings(msg.Params)
-		if err != nil || settings.SchemaVersion != 1 || len(settings.Config) == 0 {
+		if err != nil || settings.SchemaVersion != 1 || len(settings.Config) == 0 || !validCloudProvidersSettings(settings) {
 			b.codec.RespondError(msg.ID, -32602, "invalid cloud provider settings")
 			return
 		}
@@ -282,6 +315,7 @@ func gatewaySettingsRPCParams(settings cloudProvidersSettings) map[string]any {
 	return map[string]any{
 		"config": settings.Config, "cloudEnabled": settings.CloudEnabled,
 		"policy": settings.Policy, "allowPaidFallback": settings.AllowPaidFallback,
+		"fallbackCloudModel":            settings.FallbackCloudModel,
 		"monthlyBudgetUSD":              settings.MonthlyBudgetUSD,
 		"perRequestMaxEstimatedCostUSD": settings.PerRequestMaxEstimatedCostUSD,
 		"authorizedNodes":               settings.AuthorizedNodes,

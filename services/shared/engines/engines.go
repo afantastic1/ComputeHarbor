@@ -114,6 +114,10 @@ type Engine struct {
 	// runtime is Android-only, while a facade on a PC routes to that Android node.
 	// Empty means the facade can run on every platform supported by PAIR.
 	ProxyPlatform string
+
+	// External marks a user-managed engine that PAIR may probe and proxy but
+	// must never install, start, stop, or otherwise own.
+	External bool
 }
 
 // ProxyComponent is the proxy *process* identity, as distinct from the
@@ -140,7 +144,9 @@ func (e Engine) ComponentName() string { return e.Name + "-proxy" }
 const (
 	NameOllama   = "ollama"
 	NameLMStudio = "lmstudio"
+	NameMNN      = "mnn"
 	NameLlamaCPP = "llamacpp"
+	NameStrata   = "strata"
 )
 
 // all is the ordered engine set. Ollama is first; see the package comment.
@@ -162,7 +168,7 @@ var all = []Engine{
 		PortFile:         "lmstudio-proxy-port.json",
 	},
 	{
-		Name:             "mnn",
+		Name:             NameMNN,
 		DisplayName:      "MNN",
 		DiscoveryService: noderec.ServiceMNN,
 		FacadePort:       14324,
@@ -177,6 +183,15 @@ var all = []Engine{
 		FacadePort:       8080,
 		EnginePortBase:   8081,
 		PortFile:         "llamacpp-proxy-port.json",
+	},
+	{
+		Name:             NameStrata,
+		DisplayName:      "Strata",
+		DiscoveryService: noderec.ServiceStrata,
+		FacadePort:       8082,
+		EnginePortBase:   8083,
+		PortFile:         "strata-proxy-port.json",
+		External:         true,
 	},
 }
 

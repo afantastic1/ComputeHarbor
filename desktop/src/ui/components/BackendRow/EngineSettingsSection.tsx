@@ -15,7 +15,7 @@ import {
     TextArea,
     TextInput
 } from '@nvidia/foundations-react-core'
-import type { EngineType } from '@/shared/types/engines'
+import type { ManagedEngineType } from '@/shared/types/engines'
 import type {
     EngineSettingsConfig,
     EngineSettingsRequest,
@@ -51,7 +51,7 @@ export function EngineSettingsSection({
     disabled
 }: {
     nodeId: string
-    engineType: EngineType
+    engineType: ManagedEngineType
     disabled: boolean
 }) {
     const engine = engineManagerName(engineType)

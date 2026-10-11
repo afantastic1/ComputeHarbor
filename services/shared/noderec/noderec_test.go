@@ -77,6 +77,18 @@ func TestParseTXT(t *testing.T) {
 	}
 }
 
+func TestStrataServiceKeyRoundTrips(t *testing.T) {
+	record := NodeRecord{
+		SchemaVersion: SchemaVersion,
+		HostUUID:      "host-abc",
+		Services:      map[ServiceKey]int{ServiceStrata: 8082},
+	}
+	parsed := ParseTXT(record.TXT())
+	if port, ok := parsed.Port(ServiceStrata); !ok || port != 8082 {
+		t.Fatalf("Strata service port = %d, %v; want 8082, true", port, ok)
+	}
+}
+
 // TestTXTEmitsUnknownServiceKey guards the forward-compat path: an unknown/future
 // service key must be emitted even when the total service count is at or below
 // the number of known keys (a count-based guard would silently drop it).
@@ -152,6 +164,7 @@ func TestTransportPolicy(t *testing.T) {
 		{ServiceLMStudio, TransportPlain, false, false},
 		{ServiceMNN, TransportPlain, false, false},
 		{ServiceLlamaCPP, TransportPlain, false, false},
+		{ServiceStrata, TransportMTLSWhenClustered, true, false},
 		{ServiceEngineManager, TransportPlain, false, false},
 		{ServiceErrors, TransportMTLSWhenClustered, true, false},
 		{ServiceWorkload, TransportMTLSWhenClustered, true, false},

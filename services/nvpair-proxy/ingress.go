@@ -24,6 +24,7 @@ type localBackend struct {
 	Host    string `json:"host"`
 	Port    int    `json:"port"`
 	Healthy bool   `json:"healthy"`
+	APIKey  string `json:"apiKey,omitempty"`
 }
 
 // currentLocalBackend snapshots the configured local engine.
@@ -45,6 +46,9 @@ func (f *facade) currentLocalBackend() localBackend {
 func (f *facade) setLocalBackend(b localBackend) error {
 	if b.Host != "" && !isLoopbackHost(b.Host) {
 		return fmt.Errorf("local backend host %q is not loopback", b.Host)
+	}
+	if b.APIKey != "" && (f.profile.Name != "strata" || b.Engine != "strata") {
+		return fmt.Errorf("local backend credentials are only supported for Strata")
 	}
 	f.backendMu.Lock()
 	defer f.backendMu.Unlock()
@@ -145,6 +149,11 @@ func (f *facade) newLocalReverseProxy(target *url.URL) *httputil.ReverseProxy {
 			req.URL.Scheme = target.Scheme
 			req.URL.Host = target.Host
 			req.Host = target.Host
+			if f.profile.Name == "strata" {
+				if key := f.currentLocalBackend().APIKey; key != "" {
+					req.Header.Set("Authorization", "Bearer "+key)
+				}
+			}
 		},
 		Transport: f.host.plainHTTPTransport(),
 		ErrorHandler: func(ew http.ResponseWriter, _ *http.Request, err error) {

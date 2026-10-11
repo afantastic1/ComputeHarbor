@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { EnabledEngineTypes, EngineDisplayNames } from '@/shared/constants/engines'
-import { EngineType } from '@/shared/types/engines'
+import type { ManagedEngineType } from '@/shared/types/engines'
 import { useEngineStatusStore } from '@/ui/stores/engine-status.store'
 import { useConnectionStore } from '@/ui/stores/connection.store'
 import { useNodesStore } from '@/ui/stores/nodes.store'
@@ -58,14 +58,14 @@ export default function NodeEnginesInline({ nodeId }: { nodeId: string }) {
     }, [selfEngines])
 
     const handleToggle = useCallback(
-        (engineType: EngineType) => {
+        (engineType: ManagedEngineType) => {
             window.pairApi.engines.toggle(engineType, nodeId)
         },
         [nodeId]
     )
 
     const handleInstall = useCallback(
-        (engineType: EngineType) => {
+        (engineType: ManagedEngineType) => {
             window.pairApi.engines.install(engineType, nodeId)
         },
         [nodeId]

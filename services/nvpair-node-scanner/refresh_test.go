@@ -5,6 +5,8 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -136,6 +138,65 @@ func TestRefreshPopulatesInitialEmptyInventory(t *testing.T) {
 	}
 	if want := map[string][]string{"ollama": {"llama3:8b"}, "lmstudio": {"qwen:0.5b"}}; !reflect.DeepEqual(got.ModelsByEngine, want) {
 		t.Errorf("ModelsByEngine = %v, want %v", got.ModelsByEngine, want)
+	}
+}
+
+func TestEnrichStrataModelsUsesOpenAIModelIDs(t *testing.T) {
+	d := newRefreshTestDaemon()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/models" {
+			t.Errorf("request = %s %s, want GET /v1/models", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"qwen3.8-flash-next-coder-iq1_m","object":"model"}]}`))
+	}))
+	defer server.Close()
+	port := server.Listener.Addr().(*net.TCPAddr).Port
+	node := noderec.DirectoryNode{
+		HostUUID: "strata-node",
+		Services: map[noderec.ServiceKey]noderec.ServiceStatus{
+			noderec.ServiceStrata: {Port: port},
+		},
+	}
+
+	d.enrichModelsCandidates(&node, []string{"127.0.0.1"})
+
+	want := []string{"qwen3.8-flash-next-coder-iq1_m"}
+	if !reflect.DeepEqual(node.Models, want) {
+		t.Fatalf("Models = %v, want %v", node.Models, want)
+	}
+	if !reflect.DeepEqual(node.ModelsByEngine["strata"], want) {
+		t.Fatalf("Strata ModelsByEngine = %v, want %v", node.ModelsByEngine["strata"], want)
+	}
+}
+
+func TestRefreshStrataInventoryUpdatesAndRemovesModelIDs(t *testing.T) {
+	d := newRefreshTestDaemon()
+	modelID := "qwen-local-v1"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"object":"list","data":[{"id":%q,"object":"model"}]}`, modelID)
+	}))
+	defer server.Close()
+	port := server.Listener.Addr().(*net.TCPAddr).Port
+	d.dir.upsert(noderec.DirectoryNode{
+		HostUUID: "strata-refresh-node",
+		IP:       "127.0.0.1",
+		Services: map[noderec.ServiceKey]noderec.ServiceStatus{
+			noderec.ServiceStrata: {Port: port},
+		},
+	})
+
+	if !d.refreshNodeStrataModelsCandidates("strata-refresh-node", "127.0.0.1", []string{"127.0.0.1"}, port, "") {
+		t.Fatal("initial Strata model list did not update the directory")
+	}
+	modelID = "qwen-local-v2"
+	if !d.refreshNodeStrataModelsCandidates("strata-refresh-node", "127.0.0.1", []string{"127.0.0.1"}, port, "") {
+		t.Fatal("changed Strata model list did not update the directory")
+	}
+	got, _ := d.dir.get("strata-refresh-node")
+	if want := []string{"qwen-local-v2"}; !reflect.DeepEqual(got.Models, want) || !reflect.DeepEqual(got.ModelsByEngine["strata"], want) {
+		t.Fatalf("Strata refresh = models %v, attribution %v; want %v", got.Models, got.ModelsByEngine["strata"], want)
 	}
 }
 

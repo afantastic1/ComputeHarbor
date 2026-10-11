@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type {
-    EngineType,
+    ManagedEngineType,
     EngineSource,
     ModelItemStatus,
     ModelExpiry,
@@ -84,7 +84,7 @@ export interface UpdateAvailableInfo {
 }
 
 export interface BackendInfo {
-    type: EngineType
+    type: ManagedEngineType
     displayName: string
     source: EngineSource
     /** Whether the inference process (e.g. ollama serve) is running */

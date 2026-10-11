@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { ModelEntry, SORT_FIELD } from '@/ui/types/model-hub'
-import { EngineType } from '@/shared/types/engines'
+import { ManagedEngineType } from '@/shared/types/engines'
 import type { EngineHubModel } from '@/shared/types/engine-api'
 import { EngineCapabilities } from '@/ui/constants/engine-capabilities'
 import { EngineHubConfig } from '@/ui/types/engine-manifest'
@@ -20,7 +20,7 @@ export const sortFieldLabel = (sort: SORT_FIELD) => {
     }
 }
 
-function getEngineHub(engine: EngineType): EngineHubConfig | undefined {
+function getEngineHub(engine: ManagedEngineType): EngineHubConfig | undefined {
     return EngineCapabilities[engine]?.engineHub
 }
 
@@ -52,7 +52,7 @@ export function mergeModelHubResults(
  * Fetch an engine's populated catalog or submit an explicit upstream query.
  * Electron main owns every upstream source; the renderer only maps display rows.
  */
-export async function searchEngineHub(engine: EngineType, query?: string): Promise<ModelEntry[]> {
+export async function searchEngineHub(engine: ManagedEngineType, query?: string): Promise<ModelEntry[]> {
     if (!getEngineHub(engine)) return []
     const { models } = await window.pairApi.engines.searchHub(engine, query)
     return models.map(hubModelToEntry)

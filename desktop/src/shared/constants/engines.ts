@@ -1,15 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { EngineType, ModelExpiry } from '@/shared/types/engines'
+import { EngineType, ManagedEngineType, ModelExpiry } from '@/shared/types/engines'
 
-// The engines `nvpair-engine-manager` ships a manifest for, and therefore the
-// only ones PAIR can install, run or route to.
-export const EngineTypes = ['ollama', 'lm-studio', 'llama-cpp'] as const
+// Every inference engine identity PAIR can route to, including externally
+// managed engines that do not have an engine-manager manifest.
+export const EngineTypes = ['ollama', 'lm-studio', 'llama-cpp', 'strata'] as const
+
+const ManagedEngineTypes = ['ollama', 'lm-studio', 'llama-cpp'] as const
 
 // Kept as a distinct export so a future engine can ship behind it rather than
 // appearing the moment its type exists.
-export const EnabledEngineTypes: EngineType[] = ['ollama', 'lm-studio', 'llama-cpp']
+export const EnabledEngineTypes: ManagedEngineType[] = [...ManagedEngineTypes]
 
 /**
  * How `nvpair-engine-manager` spells each engine on the wire. This is the
@@ -19,7 +21,8 @@ export const EnabledEngineTypes: EngineType[] = ['ollama', 'lm-studio', 'llama-c
 export const EngineManagerNames = {
     ollama: 'ollama',
     'lm-studio': 'lmstudio',
-    'llama-cpp': 'llamacpp'
+    'llama-cpp': 'llamacpp',
+    strata: 'strata'
 } as const satisfies Record<EngineType, string>
 
 export const EngineSources = ['bundled', 'detected', 'installed'] as const
@@ -27,7 +30,8 @@ export const EngineSources = ['bundled', 'detected', 'installed'] as const
 export const EngineDisplayNames: Record<EngineType, string> = {
     ollama: 'Ollama',
     'lm-studio': 'LM Studio',
-    'llama-cpp': 'llama.cpp'
+    'llama-cpp': 'llama.cpp',
+    strata: 'Strata (External)'
 } as const
 
 /** Default docs/install URLs for built-in backends. Single source of truth for UI and adapter buildInfo(). */
@@ -37,6 +41,10 @@ export const EngineDefaultLinks: Record<EngineType, { docsUrl: string; installUr
     'llama-cpp': {
         docsUrl: 'https://github.com/ggml-org/llama.cpp/tree/master/docs',
         installUrl: 'https://github.com/ggml-org/llama.cpp/releases'
+    },
+    strata: {
+        docsUrl: 'https://github.com/Niko1221/Strata',
+        installUrl: 'https://github.com/Niko1221/Strata'
     }
 } as const
 

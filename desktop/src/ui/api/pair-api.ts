@@ -15,6 +15,7 @@ import type { NodeItemMetrics } from '@/shared/types/metrics'
 import type { Workload } from '@/shared/types/workloads'
 import type { AppInitialSnapshot, ClusterInitialSnapshot } from '@/shared/types/bootstrap'
 import type { CloudProvidersSettings } from '@/shared/types/cloud-providers'
+import type { StrataProbeResult, StrataSettings, StrataSettingsResult } from '@/shared/types/strata'
 
 // ---------------------------------------------------------------------------
 // Sub-API interfaces
@@ -113,6 +114,12 @@ export interface ICloudProvidersApi {
     onSettingsChanged(callback: (settings: CloudProvidersSettings) => void): () => void
 }
 
+export interface IStrataApi {
+    getSettings(): Promise<StrataSettingsResult>
+    saveSettings(settings: StrataSettings): Promise<StrataSettingsResult>
+    testConnection(settings: StrataSettings): Promise<StrataProbeResult>
+}
+
 // ---------------------------------------------------------------------------
 // Composite API
 // ---------------------------------------------------------------------------
@@ -132,6 +139,7 @@ export interface IPairApi {
     errors: IErrorsApi
     metrics: IMetricsApi
     cloudProviders: ICloudProvidersApi
+    strata: IStrataApi
 }
 
 // ---------------------------------------------------------------------------
@@ -202,6 +210,11 @@ export function createPairApi(transport: ServiceTransport): IPairApi {
             testConnection: providerId => transport.invoke('cloudproviders:test', { providerId }),
             onSettingsChanged: callback =>
                 transport.subscribePush('cloudproviders:changed', callback)
+        },
+        strata: {
+            getSettings: () => transport.invoke('strata:get'),
+            saveSettings: settings => transport.invoke('strata:save', settings),
+            testConnection: settings => transport.invoke('strata:test', settings)
         }
     }
 }

@@ -8,12 +8,12 @@ export interface EngineSettingsConfig {
     launchText: string
 }
 
-import type { EngineManagerName } from '@/shared/types/engines'
+import type { ManagedEngineManagerName } from '@/shared/types/engines'
 
 export interface EngineSettingsTarget {
     nodeId: string
     /** Engine-manager spelling — the settings contract is relayed verbatim. */
-    engine: EngineManagerName
+    engine: ManagedEngineManagerName
 }
 
 export interface EngineSettingsRequest extends EngineSettingsTarget {

@@ -414,7 +414,7 @@ type Proxy struct {
 	priorityGPUPressureKnown map[string]bool
 	priorityReservations     map[string]int
 	// schedulerUnavailable gates resource inputs to Gateway model scoring only.
-	schedulerUnavailable     bool
+	schedulerUnavailable bool
 
 	// appliedPriorityGeneration is the newest snapshot generation applied, so a
 	// redelivered or superseded one cannot clear reservations twice. See
@@ -851,9 +851,10 @@ func (p *Proxy) emitWorkload(method string, w Workload) {
 // pinned to that peer's exact server cert. Empty peerUUID means a plain-HTTP
 // dial — the local backend (self) or an explicit manual node.
 type candidate struct {
-	id       string
-	url      *url.URL
-	peerUUID string
+	id          string
+	url         *url.URL
+	peerUUID    string
+	localAPIKey string
 }
 
 // candidateTransport returns the reverse-proxy / model-list transport for a
@@ -1004,6 +1005,9 @@ func (f *facade) serveModelList(w http.ResponseWriter, r *http.Request, matchedR
 		}
 		upstream.Header = cors.FanoutHeaders(r.Header)
 		upstream.Header.Del("Content-Length")
+		if f.profile.Name == "strata" && cand.localAPIKey != "" {
+			upstream.Header.Set("Authorization", "Bearer "+cand.localAPIKey)
+		}
 		if upstream.Header.Get("Accept") == "" {
 			upstream.Header.Set("Accept", "application/json")
 		}
@@ -1215,6 +1219,19 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	isInf := isInferenceRequest(f.profile, r.Method, r.URL.Path)
+	if f.profile.External && isInf {
+		rejected, err := rejectsUnverifiedCapabilities(f.profile, bodyBytes)
+		if err != nil {
+			writeRequestBodyError(w, err)
+			return
+		}
+		if rejected {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"type":"unsupported_capability","message":"Strata image input and structured output require verified model capability data."}}`))
+			return
+		}
+	}
 	routingModel := ""
 	if isInf {
 		routingModel = model
@@ -1740,6 +1757,9 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				req.URL.Scheme = cand.url.Scheme
 				req.URL.Host = cand.url.Host
 				req.Host = cand.url.Host
+				if f.profile.Name == "strata" && cand.localAPIKey != "" {
+					req.Header.Set("Authorization", "Bearer "+cand.localAPIKey)
+				}
 			},
 			// A remote cluster peer is dialed over mTLS (per-peer pinned config);
 			// self/manual candidates use the plain transport. See candidateTransport.
@@ -2051,6 +2071,7 @@ func (f *facade) resolveCandidatesWithHostDedup(model string, deduplicateHosts b
 			return
 		}
 		peerUUID := ""
+		localAPIKey := ""
 		switch {
 		case isSelfTarget(u, selfPort) || isAnyAliasSelfTarget(u, aliasBoundAddresses):
 			// Our own advertised endpoint (ol now points at this proxy). Serve
@@ -2063,6 +2084,7 @@ func (f *facade) resolveCandidatesWithHostDedup(model string, deduplicateHosts b
 				return
 			}
 			u = lb
+			localAPIKey = f.currentLocalBackend().APIKey
 		case p.mesh.HasPin(n.ClusterUUID):
 			// A pinned cluster peer: reach it only over mTLS to its promoted
 			// proxy (the ol port now advertises the proxy, not the engine).
@@ -2097,9 +2119,10 @@ func (f *facade) resolveCandidatesWithHostDedup(model string, deduplicateHosts b
 		}
 		seenHost[u.Host] = true
 		out = append(out, candidate{
-			id:       n.ID,
-			url:      u,
-			peerUUID: peerUUID,
+			id:          n.ID,
+			url:         u,
+			peerUUID:    peerUUID,
+			localAPIKey: localAPIKey,
 		})
 	}
 

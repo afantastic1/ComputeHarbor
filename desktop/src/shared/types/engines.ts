@@ -22,6 +22,9 @@ import {
  */
 export type EngineType = (typeof EngineTypes)[number]
 
+/** Engines whose lifecycle and model operations are owned by engine-manager. */
+export type ManagedEngineType = Exclude<EngineType, 'strata'>
+
 /**
  * An engine identifier in `nvpair-engine-manager`'s spelling, as it appears in
  * JSON-RPC params and notification payloads. Convert at the boundary with
@@ -29,6 +32,8 @@ export type EngineType = (typeof EngineTypes)[number]
  * everywhere inside PAIR.
  */
 export type EngineManagerName = (typeof EngineManagerNames)[EngineType]
+
+export type ManagedEngineManagerName = Exclude<EngineManagerName, 'strata'>
 
 export type EngineSource = (typeof EngineSources)[number]
 

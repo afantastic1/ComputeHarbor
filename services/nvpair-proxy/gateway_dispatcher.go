@@ -23,6 +23,7 @@ import (
 
 	"nvpair-shared/appdir"
 	"nvpair-shared/modelselection"
+	"nvpair-shared/schedulerwire"
 )
 
 type gatewayPolicy string
@@ -31,11 +32,11 @@ const (
 	gatewayPolicyLocalOnly   gatewayPolicy = "local_only"
 	gatewayPolicyCloudOnly   gatewayPolicy = "cloud_only"
 	gatewayPolicyPreferLocal gatewayPolicy = "prefer_local"
-	gatewayPolicyPreferCloud gatewayPolicy = "prefer_cloud"
 )
 
 type gatewayRoutingSettings struct {
 	policy                        gatewayPolicy
+	fallbackCloudModel            string
 	cloudEnabled                  bool
 	allowPaidFallback             bool
 	monthlyBudgetUSD              float64
@@ -65,6 +66,7 @@ type gatewayRoute struct {
 	remoteNode     *Node
 	remoteFacade   *facade
 	remotePeerUUID string
+	localFallback  *gatewayRoute
 }
 
 type gatewayDispatcher struct {
@@ -290,7 +292,15 @@ func (d *gatewayDispatcher) requiresCloudAuthorization(model string) bool {
 	if strings.HasPrefix(model, "cloud/") {
 		return true
 	}
-	return isGatewayAutoAlias(model) && settings.policy != gatewayPolicyLocalOnly
+	switch model {
+	case AUTO_CLOUD_ALIAS:
+		return settings.policy != gatewayPolicyLocalOnly
+	case AUTO_LOCAL_ALIAS:
+		return false
+	default:
+		return isGatewayAutoAlias(model) &&
+			(settings.policy == gatewayPolicyCloudOnly || settings.policy == gatewayPolicyPreferLocal && settings.allowPaidFallback)
+	}
 }
 
 func (d *gatewayDispatcher) authorizeModelDirectory(authorization string) bool {
@@ -309,6 +319,18 @@ func (d *gatewayDispatcher) resolve(model string, body []byte) (gatewayRoute, *g
 	traits.model = model
 	settings := d.settings.Load()
 	if isGatewayAutoAlias(model) {
+		if model == AUTO_CLOUD_ALIAS {
+			if settings.policy == gatewayPolicyLocalOnly {
+				return gatewayRoute{}, cloudNotAllowedError()
+			}
+			return d.resolveConfiguredCloud(settings, traits)
+		}
+		if model == AUTO_LOCAL_ALIAS {
+			if settings.policy == gatewayPolicyCloudOnly {
+				return gatewayRoute{}, cloudNotAllowedError()
+			}
+			return d.resolveLocalAuto(AUTO_BALANCED_ALIAS, traits, body)
+		}
 		return d.resolveAuto(settings, traits, body)
 	}
 	if settings.policy == gatewayPolicyLocalOnly && strings.HasPrefix(model, "cloud/") {
@@ -328,57 +350,37 @@ func (d *gatewayDispatcher) resolveAuto(
 	traits gatewayRequestTraits,
 	body []byte,
 ) (gatewayRoute, *gatewayDispatchError) {
-	localRoute, localErr := d.resolveLocalAuto(traits.model, traits, body)
-	snapshot := d.registry.Snapshot()
-	var cloudRoute gatewayRoute
-	var cloudErr *gatewayDispatchError
-	if settings.cloudEnabled && settings.policy != gatewayPolicyLocalOnly {
-		cloudRoute, cloudErr = d.resolveFirstCloud(snapshot, traits.model, traits, settings)
-	} else {
-		cloudErr = cloudNotAllowedError()
-	}
-
 	switch settings.policy {
 	case gatewayPolicyCloudOnly:
-		if cloudErr != nil {
-			return gatewayRoute{}, cloudErr
-		}
-		return cloudRoute, nil
-	case gatewayPolicyPreferCloud:
-		if cloudErr == nil {
+		return d.resolveConfiguredCloud(settings, traits)
+	case gatewayPolicyPreferLocal:
+		inventory := d.proxy.gatewayInventory()
+		capacity := classifyLocalCapacity(traits.model, traits.capabilities, inventory)
+		slog.Debug("Gateway classified local model capacity", "reason", capacity.reason, "model", traits.model)
+		localRoute, localErr := d.resolveLocalAutoFromInventory(traits.model, traits, inventory)
+		if capacity.reason == localCapacitySaturated && settings.allowPaidFallback && settings.cloudEnabled {
+			cloudRoute, cloudErr := d.resolveConfiguredCloud(settings, traits)
+			if cloudErr != nil {
+				slog.Debug("Gateway kept saturated local route because configured Cloud fallback is unavailable", "reason", cloudErr.kind)
+				if localErr != nil {
+					return gatewayRoute{}, localErr
+				}
+				return localRoute, localErr
+			}
+			cloudRoute.localFallback = &localRoute
 			return cloudRoute, nil
 		}
-		if localErr == nil {
-			return localRoute, nil
+		if capacity.reason == localCapacityUnavailable && settings.allowPaidFallback && settings.cloudEnabled {
+			return d.resolveConfiguredCloud(settings, traits)
 		}
-		return gatewayRoute{}, preferDispatchError(localErr, cloudErr)
-	case gatewayPolicyPreferLocal:
-		if localErr == nil {
-			return localRoute, nil
-		}
-		if settings.allowPaidFallback && settings.cloudEnabled {
-			cloudRoute, cloudErr = d.resolveFirstCloud(snapshot, traits.model, traits, settings)
-			if cloudErr == nil {
-				return cloudRoute, nil
-			}
-		}
-		return gatewayRoute{}, localErr
+		return localRoute, localErr
 	default:
+		localRoute, localErr := d.resolveLocalAuto(traits.model, traits, body)
 		if localErr == nil {
 			return localRoute, nil
 		}
 		return gatewayRoute{}, localErr
 	}
-}
-
-func preferDispatchError(localErr, cloudErr *gatewayDispatchError) *gatewayDispatchError {
-	if localErr != nil && localErr.kind == "unsupported_capability" {
-		return localErr
-	}
-	if cloudErr != nil {
-		return cloudErr
-	}
-	return localErr
 }
 
 func (d *gatewayDispatcher) resolveLocalAuto(
@@ -386,7 +388,14 @@ func (d *gatewayDispatcher) resolveLocalAuto(
 	traits gatewayRequestTraits,
 	body []byte,
 ) (gatewayRoute, *gatewayDispatchError) {
-	inventory := d.proxy.gatewayInventory()
+	return d.resolveLocalAutoFromInventory(alias, traits, d.proxy.gatewayInventory())
+}
+
+func (d *gatewayDispatcher) resolveLocalAutoFromInventory(
+	alias string,
+	traits gatewayRequestTraits,
+	inventory []modelselection.RuntimeModel,
+) (gatewayRoute, *gatewayDispatchError) {
 	selection := (modelselection.AutoModelSelector{}).Select(alias, modelselection.Requirements{
 		Capabilities: traits.capabilities,
 	}, inventory)
@@ -397,6 +406,57 @@ func (d *gatewayDispatcher) resolveLocalAuto(
 		facade: d.proxy.facadeFor(selection.Engine), requestModel: alias,
 		upstreamModel: selection.Model.EngineModelID, traits: traits,
 	}, nil
+}
+
+type localCapacityReason string
+
+const (
+	localCapacityAvailable   localCapacityReason = "local_available"
+	localCapacitySaturated   localCapacityReason = "local_saturated"
+	localCapacityUnavailable localCapacityReason = "no_local_capacity"
+	localCapacityUnknown     localCapacityReason = "telemetry_unknown"
+)
+
+type localCapacityClassification struct {
+	reason localCapacityReason
+}
+
+func classifyLocalCapacity(
+	alias string,
+	capabilities map[string]bool,
+	inventory []modelselection.RuntimeModel,
+) localCapacityClassification {
+	selector := modelselection.AutoModelSelector{}
+	requirements := modelselection.Requirements{Capabilities: capabilities}
+	compatible := make([]modelselection.RuntimeModel, 0, len(inventory))
+	for _, candidate := range inventory {
+		if selector.Select(alias, requirements, []modelselection.RuntimeModel{candidate}) != nil {
+			compatible = append(compatible, candidate)
+		}
+	}
+	if len(compatible) == 0 {
+		return localCapacityClassification{reason: localCapacityUnavailable}
+	}
+
+	allBusy := true
+	unknown := false
+	for _, candidate := range compatible {
+		if !candidate.GPUPressureKnown {
+			allBusy = false
+			unknown = true
+			continue
+		}
+		if candidate.GPUPressure < schedulerwire.MaxGPUPressure {
+			allBusy = false
+		}
+	}
+	if allBusy {
+		return localCapacityClassification{reason: localCapacitySaturated}
+	}
+	if unknown {
+		return localCapacityClassification{reason: localCapacityUnknown}
+	}
+	return localCapacityClassification{reason: localCapacityAvailable}
 }
 
 func noCompatibleLocalModel(inventory []modelselection.RuntimeModel, capabilities map[string]bool) *gatewayDispatchError {
@@ -415,29 +475,21 @@ func hasOptionalRequirement(capabilities map[string]bool) bool {
 	return false
 }
 
-func (d *gatewayDispatcher) resolveFirstCloud(
-	snapshot *cloudRegistrySnapshot,
-	requestModel string,
+func (d *gatewayDispatcher) resolveConfiguredCloud(
+	settings *gatewayRoutingSettings,
 	traits gatewayRequestTraits,
-	_ *gatewayRoutingSettings,
 ) (gatewayRoute, *gatewayDispatchError) {
-	for _, target := range snapshot.Models() {
-		if missing := missingGatewayCapabilities(target.Capabilities, traits.capabilities); len(missing) > 0 {
-			continue
-		}
-		provider, ok := snapshot.provider(target.ProviderID)
-		if !ok {
-			continue
-		}
-		if !d.hasCredentialResolver() {
-			return gatewayRoute{}, cloudNotAllowedError()
-		}
-		return gatewayRoute{cloudTarget: target, provider: provider, requestModel: requestModel, traits: traits}, nil
+	if !settings.cloudEnabled {
+		return gatewayRoute{}, cloudNotAllowedError()
 	}
-	if hasOptionalRequirement(traits.capabilities) {
-		return gatewayRoute{}, &gatewayDispatchError{status: http.StatusUnprocessableEntity, message: "no enabled cloud model supports the requested capabilities", kind: "unsupported_capability"}
+	if settings.fallbackCloudModel == "" {
+		return gatewayRoute{}, &gatewayDispatchError{status: http.StatusNotFound, message: "no fallback cloud model is configured", kind: "model_not_found"}
 	}
-	return gatewayRoute{}, &gatewayDispatchError{status: http.StatusNotFound, message: "no available cloud model matches the requested auto policy", kind: "model_not_found"}
+	snapshot := d.registry.Snapshot()
+	if _, ok := snapshot.Resolve(settings.fallbackCloudModel); !ok {
+		return gatewayRoute{}, &gatewayDispatchError{status: http.StatusNotFound, message: "configured fallback cloud model is unavailable", kind: "model_not_found"}
+	}
+	return d.resolveCloud(snapshot, settings.fallbackCloudModel, traits.model, traits, settings)
 }
 
 func (d *gatewayDispatcher) resolveCloud(
@@ -521,8 +573,8 @@ func facadeAdvertisesModel(f *facade, model string) bool {
 	return false
 }
 
-func localGatewayCapabilities(_ string) map[string]bool {
-	return map[string]bool{"chat": true, "streaming": true}
+func localGatewayCapabilities(engine string) map[string]bool {
+	return modelCapabilities(engine)
 } //本地网关支持chat和streaming两种能力
 
 func localPublicModelID(engine, model string) string {
@@ -551,26 +603,41 @@ func (d *gatewayDispatcher) dispatchCloudForCaller(w http.ResponseWriter, r *htt
 	resolver := d.resolveCredential
 	d.credentialMu.RUnlock()
 	if resolver == nil {
+		if d.dispatchLocalFallback(w, r, body, route, "cloud_not_allowed") {
+			return
+		}
 		writeGatewayError(w, http.StatusForbidden, "cloud access is not authorized", "cloud_not_allowed")
 		return
 	}
 	credential, err := resolver(route.provider.AuthRef)
 	if err != nil || credential == "" {
+		if d.dispatchLocalFallback(w, r, body, route, "cloud_not_allowed") {
+			return
+		}
 		writeGatewayError(w, http.StatusForbidden, "cloud access is not authorized", "cloud_not_allowed")
 		return
 	}
 	settings := d.settings.Load()
 	if !validPositiveMoney(settings.monthlyBudgetUSD) || !validPositiveMoney(settings.perRequestMaxEstimatedCostUSD) {
+		if d.dispatchLocalFallback(w, r, body, route, "cloud_not_allowed") {
+			return
+		}
 		writeGatewayError(w, http.StatusForbidden, "cloud use requires an explicit monthly budget and per-request limit", "cloud_not_allowed")
 		return
 	}
 	budget, budgetErr := d.cloudBudgetLedger()
 	if budgetErr != nil || budget == nil {
+		if d.dispatchLocalFallback(w, r, body, route, "quota_unavailable") {
+			return
+		}
 		writeGatewayError(w, http.StatusServiceUnavailable, "cloud budget ledger is unavailable", "quota_unavailable")
 		return
 	}
 	reservation, err := budget.reserve(settings.monthlyBudgetUSD, settings.perRequestMaxEstimatedCostUSD)
 	if err != nil {
+		if d.dispatchLocalFallback(w, r, body, route, cloudBudgetErrorKind(err)) {
+			return
+		}
 		if errors.Is(err, errCloudQuotaExceeded) {
 			writeGatewayError(w, http.StatusTooManyRequests, "cloud monthly budget is exhausted", "quota_exceeded")
 		} else if errors.Is(err, errCloudBudgetUnavailable) {
@@ -641,6 +708,41 @@ func (d *gatewayDispatcher) dispatchCloudForCaller(w http.ResponseWriter, r *htt
 		return
 	}
 	workload.complete(usage, nil)
+}
+
+func cloudBudgetErrorKind(err error) string {
+	switch {
+	case errors.Is(err, errCloudQuotaExceeded):
+		return "budget_exceeded"
+	case errors.Is(err, errCloudBudgetUnavailable):
+		return "cloud_not_allowed"
+	default:
+		return "quota_unavailable"
+	}
+}
+
+func (d *gatewayDispatcher) dispatchLocalFallback(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	route gatewayRoute,
+	reason string,
+) bool {
+	if route.localFallback == nil || route.localFallback.facade == nil {
+		return false
+	}
+	localRoute := route.localFallback
+	forwardBody, err := rewriteGatewayModel(body, localRoute.upstreamModel)
+	if err != nil {
+		writeGatewayError(w, http.StatusBadRequest, "chat request is invalid", "invalid_request_error")
+		return true
+	}
+	slog.Debug("Gateway used local execution because Cloud fallback was unavailable", "reason", reason,
+		"model", route.requestModel, "engine", localRoute.facade.profile.Name)
+	r.Body = io.NopCloser(bytes.NewReader(forwardBody))
+	r.ContentLength = int64(len(forwardBody))
+	localRoute.facade.handleHTTP(w, r)
+	return true
 }
 
 func copyCloudStream(w http.ResponseWriter, body io.Reader) error {

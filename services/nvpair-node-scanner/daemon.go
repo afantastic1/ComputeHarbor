@@ -1329,6 +1329,7 @@ func (d *daemon) enrichModelsAt(node *noderec.DirectoryNode, host string) {
 // fetchModels performs the pinned mTLS handshake, so a shared address belonging
 // to another machine is rejected and the next published address is tried.
 func (d *daemon) enrichModelsCandidates(node *noderec.DirectoryNode, hosts []string) {
+	defer d.enrichStrataModelsCandidates(node, hosts)
 	em, ok := node.Services[noderec.ServiceEngineManager]
 	if !ok || len(hosts) == 0 {
 		return
@@ -1760,19 +1761,31 @@ func (d *daemon) refreshNodeClusterIdentityCandidates(hostUUID string, hosts []s
 func (d *daemon) refreshModelsOnce() {
 	sem := make(chan struct{}, modelsRefreshConcurrency)
 	var wg sync.WaitGroup
-	for _, n := range d.dir.snapshot(noderec.ServiceEngineManager) {
-		em, ok := n.Services[noderec.ServiceEngineManager]
-		if !ok || n.IP == "" {
+	nodes := make(map[string]noderec.DirectoryNode)
+	for _, service := range []noderec.ServiceKey{noderec.ServiceEngineManager, noderec.ServiceStrata} {
+		for _, node := range d.dir.snapshot(service) {
+			nodes[node.HostUUID] = node
+		}
+	}
+	for _, n := range nodes {
+		if n.IP == "" {
 			continue
 		}
+		em, hasEngineManager := n.Services[noderec.ServiceEngineManager]
+		strata, hasStrata := n.Services[noderec.ServiceStrata]
 		wg.Add(1)
 		sem <- struct{}{}
 		hosts := append([]string(nil), n.CandidateIPs()...)
-		go func(hostUUID, guardIP string, hosts []string, port int, clusterUUID string) {
+		go func(node noderec.DirectoryNode, hosts []string, emPort, strataPort int, hasEngineManager, hasStrata bool) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			d.refreshNodeModelsCandidates(hostUUID, guardIP, hosts, port, clusterUUID)
-		}(n.HostUUID, n.IP, hosts, em.Port, n.ClusterUUID)
+			if hasEngineManager {
+				d.refreshNodeModelsCandidates(node.HostUUID, node.IP, hosts, emPort, node.ClusterUUID)
+			}
+			if hasStrata {
+				d.refreshNodeStrataModelsCandidates(node.HostUUID, node.IP, hosts, strataPort, node.ClusterUUID)
+			}
+		}(n, hosts, em.Port, strata.Port, hasEngineManager, hasStrata)
 	}
 	wg.Wait()
 }
@@ -1821,6 +1834,13 @@ func (d *daemon) refreshNodeModelsCandidates(hostUUID, guardIP string, hosts []s
 		return false
 	}
 	models, byEngine, loadedByEngine := inventory.models, inventory.byEngine, inventory.loadedByEngine
+	if current, exists := d.dir.get(hostUUID); exists {
+		if _, hasStrata := current.Services[noderec.ServiceStrata]; hasStrata {
+			byEngine = cloneModelInventory(byEngine)
+			byEngine["strata"] = append([]string(nil), current.ModelsByEngine["strata"]...)
+			models = mergeModelNames(models, byEngine["strata"])
+		}
+	}
 	// Refresh the enrichment cache BEFORE touching the directory: the caches
 	// (infoMu) and the directory (dir.mu) are guarded by different locks, so if
 	// the directory were updated first, a concurrent onBrowse->enrichModelsAt whose
@@ -1845,6 +1865,61 @@ func (d *daemon) refreshNodeModelsCandidates(hostUUID, guardIP string, hosts []s
 	d.infoMu.Unlock()
 
 	node, changed, valid := d.dir.applyModels(hostUUID, guardIP, emPort, models, byEngine, loadedByEngine)
+	if !valid {
+		return false
+	}
+	if changed {
+		d.emit(noderec.NotifyNodeUpdated, node)
+	}
+	return changed
+}
+
+func (d *daemon) refreshNodeStrataModelsCandidates(hostUUID, guardIP string, hosts []string, port int, clusterUUID string) bool {
+	if d.reg != nil && hostUUID == d.reg.record().HostUUID {
+		hosts = []string{loopbackHost}
+	}
+	_, strataModels, fetched := askRemembered(&d.enrichHosts, hostKey{hostUUID: hostUUID, service: noderec.ServiceStrata}, hosts, func(host string) ([]string, bool) {
+		return d.fetchStrataModels(host, port, clusterUUID)
+	})
+	if !fetched {
+		return false
+	}
+	current, exists := d.dir.get(hostUUID)
+	if !exists {
+		return false
+	}
+	byEngine := cloneModelInventory(current.ModelsByEngine)
+	previous := byEngine["strata"]
+	byEngine["strata"] = append([]string(nil), strataModels...)
+	remaining := make([]string, 0, len(current.Models))
+	previousSet := make(map[string]bool, len(previous))
+	for _, model := range previous {
+		previousSet[model] = true
+	}
+	for _, model := range current.Models {
+		if !previousSet[model] {
+			remaining = append(remaining, model)
+		}
+	}
+	models := mergeModelNames(remaining, strataModels)
+	loadedByEngine := cloneModelInventory(current.LoadedByEngine)
+	delete(loadedByEngine, "strata")
+	d.infoMu.Lock()
+	if d.lastModels == nil {
+		d.lastModels = make(map[string][]string)
+	}
+	if d.lastModelsByEngine == nil {
+		d.lastModelsByEngine = make(map[string]map[string][]string)
+	}
+	if d.lastLoadedByEngine == nil {
+		d.lastLoadedByEngine = make(map[string]map[string][]string)
+	}
+	d.lastModels[hostUUID] = models
+	d.lastModelsByEngine[hostUUID] = byEngine
+	d.lastLoadedByEngine[hostUUID] = loadedByEngine
+	d.infoMu.Unlock()
+
+	node, changed, valid := d.dir.applyStrataModels(hostUUID, guardIP, port, strataModels)
 	if !valid {
 		return false
 	}

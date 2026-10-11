@@ -18,6 +18,7 @@ import { BackendRow } from '@/ui/components/BackendRow/BackendRow'
 import { InlineErrorBanner } from '@/ui/components/InlineErrorBanner'
 import { isElectron } from '@/ui/api/bootstrap'
 import CloudProvidersSettingsCard from '@/ui/components/ServiceSettings/CloudProvidersSettings'
+import StrataSettingsCard from '@/ui/components/ServiceSettings/StrataSettingsCard'
 
 /**
  * Inline engine editor for a single node, rendered inside the overview node
@@ -124,6 +125,7 @@ export default function NodeEngineSettings({ nodeId }: { nodeId: string }) {
                 />
             ))}
             {isElectron && nodeId === selfId && <CloudProvidersSettingsCard />}
+            {isElectron && nodeId === selfId && <StrataSettingsCard />}
         </Stack>
     )
 }

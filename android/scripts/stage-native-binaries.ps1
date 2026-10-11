@@ -14,6 +14,7 @@ $services = @(
     'nvpair-ui-broker',
     'nvpair-engine-manager',
     'nvpair-node-scanner',
+    'nvpair-node-info',
     'nvpair-cluster-manager',
     'nvpair-proxy',
     'nvpair-job-scheduler',

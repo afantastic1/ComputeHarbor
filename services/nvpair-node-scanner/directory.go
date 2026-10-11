@@ -262,6 +262,42 @@ func (d *directory) applyModels(hostUUID, ip string, emPort int, models []string
 	return n, true, true
 }
 
+func (d *directory) applyStrataModels(hostUUID, ip string, strataPort int, strataModels []string) (node noderec.DirectoryNode, changed, ok bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	n, present := d.nodes[hostUUID]
+	if !present {
+		return noderec.DirectoryNode{}, false, false
+	}
+	service, has := n.Services[noderec.ServiceStrata]
+	if !has || n.IP != ip || service.Port != strataPort {
+		return n, false, false
+	}
+	old := make(map[string]bool, len(n.ModelsByEngine["strata"]))
+	for _, model := range n.ModelsByEngine["strata"] {
+		old[model] = true
+	}
+	remaining := make([]string, 0, len(n.Models))
+	for _, model := range n.Models {
+		if !old[model] {
+			remaining = append(remaining, model)
+		}
+	}
+	models := mergeModelNames(remaining, strataModels)
+	byEngine := cloneModelInventory(n.ModelsByEngine)
+	byEngine["strata"] = append([]string(nil), strataModels...)
+	loadedByEngine := cloneModelInventory(n.LoadedByEngine)
+	delete(loadedByEngine, "strata")
+	if sameStringSet(n.Models, models) && sameByEngine(n.ModelsByEngine, byEngine) && sameByEngine(n.LoadedByEngine, loadedByEngine) {
+		return n, false, true
+	}
+	n.Models = models
+	n.ModelsByEngine = byEngine
+	n.LoadedByEngine = loadedByEngine
+	d.nodes[hostUUID] = n
+	return n, true, true
+}
+
 // applyClusterIdentity sets one node's cluster principal and the trust annotation
 // derived from it, reporting whether either changed. It is the write path for both
 // membership reconciles — the pin-set pass (daemon.reconcileTrust) and the

@@ -67,6 +67,13 @@ nothing to answer and the caller must not wait:
   report in exchange for an ack nobody reads.
 - `log/set-level` (above).
 
+### Strata model discovery
+
+Nodes advertising the `st` Strata service are enriched from that service's
+`GET /v1/models` response. Model IDs are preserved exactly and attributed to
+the `strata` engine. A local endpoint may be queried over loopback; remote
+endpoints require the existing pinned cluster mTLS path.
+
 ### Notifications (daemon → caller)
 
 Emitted as the directory changes. Each carries the affected `DirectoryNode` (identity, advertised service ports, enrichment, `trusted`).

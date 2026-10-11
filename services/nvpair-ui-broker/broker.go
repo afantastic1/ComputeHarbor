@@ -2358,10 +2358,14 @@ func (b *Broker) Serve(ctx context.Context) error {
 	// startup attempts have established either readiness or a terminal outcome.
 	// This prevents a restored engine from taking a persisted proxy port before
 	// the broker can resolve ownership.
+	// Hosted engines such as Android MNN do not participate in Ollama or
+	// LM Studio's managed-port ownership. Start their advertisement loop outside
+	// these gates so they remain available while either desktop-engine setup is
+	// still reconciling.
+	go b.runHostedEngineAdvertisements(ctx)
 	availabilityRunners := []func(context.Context){
 		func(ctx context.Context) { b.runAutoAdvertiseEngine(ctx, ollamaProxyProfile) },
 		b.runAutoAdvertiseLMStudio,
-		b.runHostedEngineAdvertisements,
 		b.runNonHostedEngineAdvertisements,
 	}
 	for _, profile := range engineProxyProfiles {
@@ -3339,6 +3343,9 @@ func (b *Broker) handleMessage(msg *Message) {
 	}
 
 	switch msg.Method {
+	case "strata:get", "strata:test", "strata:save":
+		go b.handleStrataRPC(msg)
+
 	case "cloudproviders:get", "cloudproviders:save", "cloudproviders:credential:set", "cloudproviders:test":
 		go b.handleCloudProvidersRPC(msg)
 

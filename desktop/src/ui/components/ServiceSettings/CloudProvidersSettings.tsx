@@ -24,6 +24,8 @@ const EMPTY_SETTINGS: CloudProvidersSettings = {
     config: { schema_version: 1, providers: [] },
     cloudEnabled: false,
     policy: 'local_only',
+    policyMigrationRequired: false,
+    fallbackCloudModel: '',
     allowPaidFallback: false,
     monthlyBudgetUSD: 0,
     perRequestMaxEstimatedCostUSD: 0,
@@ -33,14 +35,12 @@ const EMPTY_SETTINGS: CloudProvidersSettings = {
 const POLICY_LABELS: Record<CloudProvidersSettings['policy'], string> = {
     local_only: 'Local only',
     cloud_only: 'Cloud only',
-    prefer_local: 'Prefer local',
-    prefer_cloud: 'Prefer cloud'
+    prefer_local: 'Prefer local'
 }
 const POLICY_VALUES: CloudProvidersSettings['policy'][] = [
     'local_only',
     'cloud_only',
-    'prefer_local',
-    'prefer_cloud'
+    'prefer_local'
 ]
 
 export default function CloudProvidersSettingsCard() {
@@ -134,9 +134,40 @@ export default function CloudProvidersSettingsCard() {
         () =>
             POLICY_VALUES.map(policy => ({
                 children: POLICY_LABELS[policy],
-                onSelect: () => setSettings(current => ({ ...current, policy }))
+                onSelect: () =>
+                    setSettings(current => ({
+                        ...current,
+                        policy,
+                        policyMigrationRequired: false
+                    }))
             })),
         []
+    )
+    const fallbackModelItems: DropdownEntry[] = useMemo(
+        () => [
+            {
+                children: 'No paid fallback model',
+                onSelect: () => setSettings(current => ({ ...current, fallbackCloudModel: '' }))
+            },
+            ...settings.config.providers
+                .filter(provider => provider.enabled)
+                .flatMap(provider =>
+                    provider.models.map(model => ({
+                        children: `${provider.id} · ${model.public_id}`,
+                        onSelect: () =>
+                            setSettings(current => ({
+                                ...current,
+                                fallbackCloudModel: model.public_id
+                            }))
+                    }))
+                )
+        ],
+        [settings.config.providers]
+    )
+    const fallbackModelAvailable = settings.config.providers.some(
+        provider =>
+            provider.enabled &&
+            provider.models.some(model => model.public_id === settings.fallbackCloudModel)
     )
     const providerKindItems: DropdownEntry[] = useMemo(
         () => [
@@ -450,6 +481,12 @@ export default function CloudProvidersSettingsCard() {
                     </Flex>
 
                     <Stack gap="2">
+                        {settings.policyMigrationRequired && (
+                            <InlineErrorBanner
+                                severity="warning"
+                                message="The previous Prefer cloud policy has been retired. Choose and save a routing policy; requests currently use Local only until you confirm."
+                            />
+                        )}
                         <Text kind="body/semibold/sm">Paired node Cloud access</Text>
                         <Text kind="body/regular/sm" className="text-subtle-color">
                             Pairing does not grant access to this host&apos;s paid Cloud account.
@@ -465,7 +502,11 @@ export default function CloudProvidersSettingsCard() {
                                             entry.nodeUuid === member.nodeUuid &&
                                             entry.certFingerprint === member.certFingerprint
                                     )}
-                                    disabled={busy || !member.certFingerprint}
+                                    disabled={
+                                        busy ||
+                                        settings.policyMigrationRequired ||
+                                        !member.certFingerprint
+                                    }
                                     onCheckedChange={authorized =>
                                         void setNodeAuthorization(member, authorized)
                                     }
@@ -529,7 +570,7 @@ export default function CloudProvidersSettingsCard() {
                                 kind="secondary"
                                 size="small"
                                 onClick={addProvider}
-                                disabled={busy}
+                                disabled={busy || settings.policyMigrationRequired}
                             >
                                 Add provider
                             </Button>
@@ -537,7 +578,11 @@ export default function CloudProvidersSettingsCard() {
                                 kind="secondary"
                                 size="small"
                                 onClick={() => void removeProvider()}
-                                disabled={busy || !editingProviderRefId}
+                                disabled={
+                                    busy ||
+                                    settings.policyMigrationRequired ||
+                                    !editingProviderRefId
+                                }
                             >
                                 Remove provider
                             </Button>
@@ -601,9 +646,36 @@ export default function CloudProvidersSettingsCard() {
                                 size="small"
                                 aria-label="Select cloud routing policy"
                             >
-                                {POLICY_LABELS[settings.policy]}
+                                {settings.policyMigrationRequired
+                                    ? 'Choose a routing policy'
+                                    : POLICY_LABELS[settings.policy]}
                             </Dropdown>
                         </FormField>
+                        <Stack gap="1">
+                            <FormField slotLabel="Paid fallback model">
+                                <Dropdown
+                                    items={fallbackModelItems}
+                                    size="small"
+                                    aria-label="Select paid Cloud fallback model"
+                                >
+                                    {settings.fallbackCloudModel === ''
+                                        ? 'No model selected'
+                                        : fallbackModelAvailable
+                                          ? settings.fallbackCloudModel
+                                          : `Unavailable: ${settings.fallbackCloudModel}`}
+                                </Dropdown>
+                            </FormField>
+                            <Text kind="body/regular/sm" className="text-subtle-color">
+                                Only this selected model is used for automatic Cloud routing. A
+                                fallback request may incur provider charges.
+                            </Text>
+                            {settings.fallbackCloudModel !== '' && !fallbackModelAvailable && (
+                                <InlineErrorBanner
+                                    severity="warning"
+                                    message="The selected fallback model is unavailable. Choose an enabled model or clear the selection; automatic routing will not switch to another provider."
+                                />
+                            )}
+                        </Stack>
                         <FormField slotLabel="Monthly budget (USD)">
                             <TextInput
                                 size="small"
@@ -667,7 +739,7 @@ export default function CloudProvidersSettingsCard() {
                                 color="brand"
                                 size="small"
                                 onClick={() => void save()}
-                                disabled={busy}
+                                disabled={busy || settings.policyMigrationRequired}
                             >
                                 Save provider settings
                             </Button>

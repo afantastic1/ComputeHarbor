@@ -13,7 +13,7 @@
 ## Drift summary
 
 ### Notifications emitted but NOT consumed by the bridge
-- ❌ nvpair-cluster-manager → cluster:join-request-received
+- none ✅
 
 ### Requests the backend handles but the bridge never calls (unused capability)
 - ⚠️ nvpair-cluster-manager → cluster:list-join-requests
@@ -66,7 +66,7 @@
 | `cluster:invite-canceled` | notification (we consume) | ✅ yes |
 | `cluster:invite-expired` | notification (we consume) | ✅ yes |
 | `cluster:invite-received` | notification (we consume) | ✅ yes |
-| `cluster:join-request-received` | notification (we consume) | ❌ **MISSING** |
+| `cluster:join-request-received` | notification (we consume) | ➖ ignored |
 | `cluster:trust-changed` | notification (we consume) | ➖ ignored |
 | `nodes:changed` | notification (we consume) | ✅ yes |
 | `cluster:cancel-invite` | request (we call) | ✅ yes |
@@ -303,6 +303,9 @@
 | `node/updated` | request (we call) | ✅ yes |
 | `nodes/list` | request (we call) | ✅ yes |
 | `ready` | request (we call) | ✅ yes |
+| `strata:get` | request (we call) | ✅ yes |
+| `strata:save` | request (we call) | ✅ yes |
+| `strata:test` | request (we call) | ✅ yes |
 | `workloads:get-initial` | request (we call) | ✅ yes |
 | `workloads:remove` | request (we call) | ✅ yes |
 | `workloads:subscribe` | request (we call) | ✅ yes |

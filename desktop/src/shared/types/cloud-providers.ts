@@ -25,7 +25,9 @@ export interface CloudProvidersSettings {
     schema_version: 1
     config: { schema_version: 1; providers: CloudProviderConfig[] }
     cloudEnabled: boolean
-    policy: 'local_only' | 'cloud_only' | 'prefer_local' | 'prefer_cloud'
+    policy: 'local_only' | 'cloud_only' | 'prefer_local'
+    policyMigrationRequired: boolean
+    fallbackCloudModel: string
     allowPaidFallback: boolean
     monthlyBudgetUSD: number
     perRequestMaxEstimatedCostUSD: number

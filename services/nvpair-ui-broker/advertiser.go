@@ -8,6 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"os"
+	"strconv"
 	"time"
 
 	"nvpair-shared/httpcon"
@@ -137,7 +140,15 @@ func (b *Broker) reconcileEngineAdvertisement(profile engineProxyProfile, client
 			enginePort, probe = 0, false
 		}
 	}
-	backendHealthy := probe && enginePort > 0 && enginePort != facadePort && checkEngineHealth(profile, client, enginePort)
+	backendHealthy := probe && enginePort > 0 && enginePort != facadePort
+	if backendHealthy {
+		if profile.External {
+			settings, err := loadStrataSettings()
+			backendHealthy = err == nil && probeStrata(settings).Connected
+		} else {
+			backendHealthy = checkEngineHealth(profile, client, enginePort)
+		}
+	}
 	facadeReady := facadePort > 0
 	if shouldAdvertiseEngine(profile, backendHealthy, facadeReady, enginePort, facadePort) {
 		b.registerService(noderec.RegisterParams{Service: profile.DiscoveryService, Port: facadePort})
@@ -270,6 +281,7 @@ type proxyLocalBackend struct {
 	Host    string `json:"host"`
 	Port    int    `json:"port"`
 	Healthy bool   `json:"healthy"`
+	APIKey  string `json:"apiKey,omitempty"`
 }
 
 // setProxyLocalBackend hands the proxy its local (loopback) engine endpoint, or
@@ -280,11 +292,18 @@ func (b *Broker) setProxyLocalBackend(p *proxyProcess, engine string, port int, 
 	if p == nil {
 		return
 	}
+	apiKey := ""
+	if engine == "strata" {
+		if settings, err := loadStrataSettings(); err == nil && settings.APIKeyEnv != "" {
+			apiKey, _ = os.LookupEnv(settings.APIKeyEnv)
+		}
+	}
 	b.callProxyManual(p, engine, "node/set-local-backend", proxyLocalBackend{
 		Engine:  engine,
 		Host:    "127.0.0.1",
 		Port:    port,
 		Healthy: healthy,
+		APIKey:  apiKey,
 	}, "local-backend")
 }
 
@@ -293,6 +312,18 @@ func (b *Broker) setProxyLocalBackend(p *proxyProcess, engine string, port int, 
 // running:false response is authoritative and returns false; only an unavailable
 // manager/RPC retains the legacy stock-port fallback.
 func (b *Broker) localEnginePort(engine string, fallback int) (int, bool) {
+	if engine == "strata" {
+		settings, err := loadStrataSettings()
+		if err != nil || !settings.Enabled {
+			return 0, false
+		}
+		parsed, err := url.Parse(settings.Endpoint)
+		if err != nil {
+			return 0, false
+		}
+		port, err := strconv.Atoi(parsed.Port())
+		return port, err == nil && port > 0
+	}
 	em := b.getEngineMgr()
 	if em == nil {
 		return fallback, true

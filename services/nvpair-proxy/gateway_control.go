@@ -63,6 +63,7 @@ type gatewayConfigureParams struct {
 	Config                        json.RawMessage                 `json:"config"`
 	CloudEnabled                  bool                            `json:"cloudEnabled"`
 	Policy                        gatewayPolicy                   `json:"policy"`
+	FallbackCloudModel            string                          `json:"fallbackCloudModel"`
 	AllowPaidFallback             bool                            `json:"allowPaidFallback"`
 	MonthlyBudgetUSD              float64                         `json:"monthlyBudgetUSD"`
 	PerRequestMaxEstimatedCostUSD float64                         `json:"perRequestMaxEstimatedCostUSD"`
@@ -84,9 +85,12 @@ func (d *gatewayDispatcher) configure(params gatewayConfigureParams) error {
 		params.Policy = gatewayPolicyLocalOnly
 	}
 	switch params.Policy {
-	case gatewayPolicyLocalOnly, gatewayPolicyCloudOnly, gatewayPolicyPreferLocal, gatewayPolicyPreferCloud:
+	case gatewayPolicyLocalOnly, gatewayPolicyCloudOnly, gatewayPolicyPreferLocal:
 	default:
 		return fmt.Errorf("unsupported cloud routing policy")
+	}
+	if params.FallbackCloudModel != "" && !validCloudPublicID(params.FallbackCloudModel) {
+		return fmt.Errorf("fallback cloud model ID is invalid")
 	}
 	if params.MonthlyBudgetUSD < 0 || params.PerRequestMaxEstimatedCostUSD < 0 {
 		return fmt.Errorf("cloud budget limits cannot be negative")
@@ -103,6 +107,7 @@ func (d *gatewayDispatcher) configure(params gatewayConfigureParams) error {
 	d.pruneProviderCredentials(snapshot)
 	d.settings.Store(&gatewayRoutingSettings{
 		policy: params.Policy, cloudEnabled: params.CloudEnabled,
+		fallbackCloudModel:            params.FallbackCloudModel,
 		allowPaidFallback:             params.AllowPaidFallback,
 		monthlyBudgetUSD:              params.MonthlyBudgetUSD,
 		perRequestMaxEstimatedCostUSD: params.PerRequestMaxEstimatedCostUSD,

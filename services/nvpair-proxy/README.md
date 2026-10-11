@@ -115,6 +115,13 @@ clients use `8080`, while the managed `llama-server` stays on `8081`.
 
 ### HTTP Reverse Proxy
 
+The Strata facade is the externally managed local engine route. It exposes
+`GET /v1/models` and `POST /v1/chat/completions`; streaming chat and tool calls
+are supported. Vision input and structured output remain gated because those
+request capabilities have not been verified for Strata. PAIR discovers model
+IDs from Strata's OpenAI-compatible model list and does not own the Strata
+process.
+
 A facade listens on its enabled port and forwards incoming requests to the
 currently active node — except the model-list routes, which are queried across
 every candidate node concurrently and merged into one de-duplicated inventory.

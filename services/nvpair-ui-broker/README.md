@@ -190,10 +190,32 @@ Shared lifecycle for all workers:
 
 ## JSON-RPC Surface
 
+### Strata connection
+
+Strata settings are broker-owned and persisted in `strata.json`. They contain
+an enabled flag, a loopback endpoint, an optional exact model ID, and an
+optional environment-variable name for bearer authentication. The secret
+value is never persisted or returned to the renderer. Enabling requires a
+successful model-list probe.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `strata:get` | none | `{settings, probe}` including discovered model IDs and a categorized error |
+| `strata:test` | settings object | `{settings, probe}`; probes without saving |
+| `strata:save` | settings object | `{settings, probe}` after validation and save |
+
+Only a healthy enabled connection is advertised as the local `st` service.
+Strata is external: engine-manager does not own its install or lifecycle.
+
 ### Cloud provider control
 
 The broker owns the persisted, non-secret cloud provider settings in
-`cloud-providers.json`. These methods are explicit commands; reading the
+`cloud-providers.json`. The settings include `fallbackCloudModel`, one optional
+canonical `cloud/...` model ID used by automatic paid fallback. If a stored
+policy is the retired `prefer_cloud` value, reads expose `local_only` and a
+`policyMigrationRequired` confirmation flag; saves require one of the three
+current policies and an explicit confirmation. A legacy value never grants
+automatic paid access. These methods are explicit commands; reading the
 settings never returns provider keys:
 
 | Method | Params | Result |

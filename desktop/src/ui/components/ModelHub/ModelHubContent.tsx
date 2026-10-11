@@ -11,7 +11,7 @@ import { ModelHubList } from './ModelHubList'
 import { mergeModelHubResults, searchEngineHub } from '@/ui/utils/model-hub-search'
 import { resolveStoredSort, writeStoredSort } from '@/ui/utils/model-hub-content-storage'
 import { isHubEntryDownloaded } from '@/ui/utils/match-downloaded-model'
-import { EngineType } from '@/shared/types/engines'
+import { EngineType, ManagedEngineType } from '@/shared/types/engines'
 import type { ModelItem } from '@/ui/types/engine-info'
 import getErrorString from '@/shared/utils/get-error-string'
 
@@ -60,7 +60,7 @@ export const ModelHubContent = ({
     const searchGenRef = useRef(0)
     const submittedQueryRef = useRef('')
 
-    const loadModels = useCallback(async (backend: EngineType) => {
+    const loadModels = useCallback(async (backend: ManagedEngineType) => {
         const cached = cacheRef.current.get(backend)
         if (cached) {
             setAllModels(cached)
@@ -91,7 +91,7 @@ export const ModelHubContent = ({
         setRemoteModels([])
         setSearching(false)
         submittedQueryRef.current = ''
-        if (!engine) {
+        if (!engine || engine === 'strata') {
             setAllModels([])
             setQuery('')
             setSort({ ...SORT_DEFAULT_STATE })

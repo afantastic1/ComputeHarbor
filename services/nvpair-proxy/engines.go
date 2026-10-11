@@ -164,6 +164,7 @@ func buildProfiles() []engineProfile {
 	lmstudio, _ := engines.ByName("lmstudio")
 	mnn, _ := engines.ByName("mnn")
 	llamacpp, _ := engines.ByName("llamacpp")
+	strata, _ := engines.ByName("strata")
 	ollamaRoutes := slices.Concat(ollamaBaseRoutes, openAIInferenceRoutes, anthropicInferenceRoutes)
 	lmStudioRoutes := slices.Concat(lmStudioBaseRoutes, openAIInferenceRoutes, anthropicInferenceRoutes)
 	mnnRoutes := []route{
@@ -171,6 +172,10 @@ func buildProfiles() []engineProfile {
 		{Path: "/v1/chat/completions", Role: roleInferencePOST},
 	}
 	llamaCPPRoutes := slices.Concat(llamaCPPBaseRoutes, openAIInferenceRoutes)
+	strataRoutes := []route{
+		{Path: "/v1/models", Role: roleModelListOpenAIGET},
+		{Path: "/v1/chat/completions", Role: roleInferencePOST},
+	}
 
 	return []engineProfile{
 		{
@@ -204,6 +209,12 @@ func buildProfiles() []engineProfile {
 			Routes:                llamaCPPRoutes,
 			ModelNaming:           exactID,
 			ReservedPersistedPort: 8081,
+		},
+		{
+			Engine:         strata,
+			StandalonePort: 8082,
+			Routes:         strataRoutes,
+			ModelNaming:    exactID,
 		},
 	}
 }

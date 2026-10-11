@@ -8,7 +8,7 @@ import { errorDismissalKey } from '@/ui/utils/error-modal-dismissal'
 import { InlineErrorBanner } from './InlineErrorBanner'
 import { useErrorsStore } from '@/ui/stores/errors.store'
 import { useNodesStore } from '@/ui/stores/nodes.store'
-import { isEngineType } from '@/shared/utils/engines'
+import { isManagedEngineType } from '@/shared/utils/engines'
 import type { ServiceError } from '@/shared/types/errors'
 import type { NodeItem } from '@/shared/types/nodes'
 
@@ -102,7 +102,7 @@ function bannerStatus(severity: ServiceError['severity']): 'info' | 'warning' | 
 function buildRetry(error: ServiceError): (() => void) | null {
     if (error.action !== 'retry') return null
     const { engineType, nodeId, operation, modelName } = error
-    if (!engineType || !isEngineType(engineType) || !nodeId) return null
+    if (!engineType || !isManagedEngineType(engineType) || !nodeId) return null
     const engines = window.pairApi.engines
     switch (operation) {
         case 'install':

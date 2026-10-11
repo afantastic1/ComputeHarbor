@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { EngineType } from '@/shared/types/engines'
+import type { EngineType, ManagedEngineType } from '@/shared/types/engines'
 import { EnabledEngineTypes } from '@/shared/constants/engines'
 import { EngineCapabilities } from '@/ui/constants/engine-capabilities'
 import type { PlatformDisplayName } from '@/shared/types/platform'
@@ -14,10 +14,11 @@ export const WELCOME_STEP_SUB_HEADINGS = ['', 'You can update later by clicking 
 export const WELCOME_ENGINE_DEFAULT_SELECTED: Record<EngineType, boolean> = {
     ollama: true,
     'lm-studio': true,
-    'llama-cpp': true
+    'llama-cpp': true,
+    strata: false
 }
 
-export function getWelcomeEngineCandidates(os: PlatformDisplayName): EngineType[] {
+export function getWelcomeEngineCandidates(os: PlatformDisplayName): ManagedEngineType[] {
     const platform = displayNameToPlatform(os)
     return EnabledEngineTypes.filter(t => {
         const caps = EngineCapabilities[t]

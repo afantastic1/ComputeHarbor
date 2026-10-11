@@ -213,6 +213,9 @@ func TestLlamaCPPSendsTheModelAlone(t *testing.T) {
 // or llama.cpp can download, and llama.cpp's needs a quantization after a colon.
 func TestDownloadPromptUsesTheEnginesSpelling(t *testing.T) {
 	for _, e := range engines.All() {
+		if e.Name == engines.NameMNN || e.External {
+			continue
+		}
 		if _, ok := downloadExamples[e.Name]; !ok {
 			t.Errorf("%s has no download example", e.Name)
 		}
@@ -231,6 +234,12 @@ func TestDownloadPromptUsesTheEnginesSpelling(t *testing.T) {
 // names at runtime.
 func TestEveryEngineHasAModelWire(t *testing.T) {
 	for _, e := range engines.All() {
+		if e.Name == engines.NameMNN || e.External {
+			if _, err := modelActionWire(e.Name, "load", "m"); err == nil {
+				t.Errorf("%s unexpectedly exposes model operations", e.Name)
+			}
+			continue
+		}
 		for op := range modelActions {
 			if _, err := modelActionWire(e.Name, op, "m"); err != nil {
 				t.Errorf("%s has no local wire for %s: %v", e.Name, op, err)

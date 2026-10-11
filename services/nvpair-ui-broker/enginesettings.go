@@ -178,7 +178,8 @@ func isEngineDiscoveryService(service noderec.ServiceKey) bool {
 }
 
 func (b *Broker) settingsSnapshotLocked(ctx context.Context, engine string) (settings.Snapshot, error) {
-	if _, ok := engineProxyProfileFor(engine); !ok {
+	profile, ok := engineProxyProfileFor(engine)
+	if !ok || profile.External {
 		return settings.Snapshot{}, fmt.Errorf("this engine does not support settings")
 	}
 	if err := b.loadEngineSettingsLocked(); err != nil {
@@ -718,6 +719,9 @@ func (b *Broker) refreshEngineSettings(ctx context.Context) {
 				defer cancel()
 				changed := false
 				for _, engine := range engines.Names() {
+					if profile, ok := engineProxyProfileFor(engine); ok && profile.External {
+						continue
+					}
 					var before settings.Snapshot
 					if r := b.engineSettings[engine]; r != nil {
 						before = r.Snapshot
