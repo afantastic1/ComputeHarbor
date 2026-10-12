@@ -11,9 +11,9 @@ SPDX-License-Identifier: Apache-2.0
 
 ## 1. Purpose
 Decides **where inference should go**. On every accepted workload, discovery, or
-effective GPU or VRAM pressure change, with a periodic timer as reconciliation,
-the Job Scheduler ranks the cluster's nodes by total pending work plus the
-highest known resource pressure. It emits that node-wide order, pending count,
+GPU or VRAM telemetry change, with a periodic timer as reconciliation, the Job
+Scheduler ranks the cluster's nodes by total pending work plus GPU pressure.
+VRAM pressure remains separately reported. It emits that node-wide order, pending count,
 and both pressure signals so the Broker can push the
 snapshot to the matching local `nvpair-proxy` instance. Before
 forwarding, a proxy atomically adds its own not-yet-observed reservations and
@@ -97,17 +97,17 @@ richer policies such as model locality, latency, and affinity can grow later beh
   freshness limit. `gpuPressureKnown` and `vramPressureKnown` distinguish fresh
   bands from unknown signals. When both are unknown, effective pressure is the
   neutral value 1. A fresh stream after a gap starts a new EWMA.
-- **Cold-start / tie-break (decided — pressure then stable identity).** Rank by
-  `pending + max(known gpuPressure, known vramPressure)`, then lower effective
-  pressure, then `hostUuid`. A fixed final key
-  makes equal-load nodes deterministic; nodes with no telemetry all receive the
-  same neutral pressure and collapse to UUID order.
+- **Cold-start / tie-break (decided — GPU pressure then stable identity).** Rank
+  by `pending + gpuPressure`, then lower GPU pressure, then `hostUuid`. VRAM
+  pressure remains independently reported but does not affect node ordering.
+  Unknown GPU telemetry uses neutral pressure 1. A fixed final key makes
+  equal-load nodes deterministic.
 - **Manual pin precedence (decided — manual pin wins).** A user `node/select` pin
   overrides the list; the list governs only auto routing (§7.3).
 - **`node/set-priority` proxy semantics (decided — resource-aware reservations).**
   Every engine facade stores the ordered nodes and optional ranks. For auto-routed
   model-bearing inference they atomically minimize
-  `rank.pending + max(rank.gpuPressure, rank.vramPressure) + localReservations` within the best
+  `rank.pending + rank.gpuPressure + localReservations` within the best
   model-eligibility tier,
   using scheduler order as the tie-break. They retain known unlisted nodes as
   fallbacks and treat an empty list as default auto order. A nodes-only payload
@@ -253,8 +253,9 @@ proxy-side, §4). The scheduler never calls it — it only emits `schedule:prior
   advancing its applied epoch would let one taken before it release one taken
   after — the undercount this field exists to prevent.
 - **Semantics** (proxy): for each auto-routed model-bearing inference request,
-  atomically choose the minimum authoritative pending count plus the maximum of
-  GPU and VRAM pressure plus local reservations, then reserve that node before forwarding.
+  atomically choose the minimum authoritative pending count plus GPU pressure
+  plus local reservations, then reserve that node before forwarding. VRAM
+  pressure is reported for telemetry but is not part of the sort score.
   Consider only scheduler-listed nodes in the best available model tier; use
   scheduler order as the tie-break. **Unknown ids are ignored.** A **known node
   not in the list** remains a lowest-priority fallback, and an **empty list**
@@ -307,7 +308,7 @@ signal.
 ### 7.3 Selection-state (proxy side, for reference)
 
 Effective target: `manual pin (node/select)` → else
-`pending + max(gpuPressure, vramPressure) + local reservations within the priority list` → else
+`pending + gpuPressure + local reservations within the priority list` → else
 `default auto`. A snapshot delivered while a pin is active is stored but doesn't
 move traffic; clearing the pin activates the most-recent snapshot.
 `node/selection-changed` fires only for the active target.
@@ -353,7 +354,7 @@ side.
 - `scheduler:*` / `schedule:*` / `node/set-priority` names are namespaced and
   additive — new capabilities are new methods.
 - The added `ranks` field is optional: older consumers continue using
-  `{engine,nodes}`, while current proxies use pending counts and GPU/VRAM pressure for
+  `{engine,nodes}`, while current proxies use pending counts and GPU pressure for
   local reservations.
 
 ## 8. Dependencies

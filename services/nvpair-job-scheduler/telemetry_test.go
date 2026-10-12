@@ -107,7 +107,7 @@ func TestApplyTelemetryTracksVRAMPressureIndependently(t *testing.T) {
 	}
 
 	if !manager.applyTelemetryAt(sample, now) {
-		t.Fatal("first VRAM-saturated sample should change effective telemetry")
+		t.Fatal("first sample should change telemetry")
 	}
 	if got := manager.gpuPressureAt("node-a", now); got != 0 {
 		t.Fatalf("GPU pressure = %d, want 0", got)
@@ -115,10 +115,6 @@ func TestApplyTelemetryTracksVRAMPressureIndependently(t *testing.T) {
 	if got := manager.vramPressureAt("node-a", now); got != 3 {
 		t.Fatalf("VRAM pressure = %d, want 3", got)
 	}
-	if got := manager.resourcePressureAt("node-a", now); got != 3 {
-		t.Fatalf("resource pressure = %d, want 3", got)
-	}
-
 	sample.VRAMUtilizationKnown = false
 	if !manager.applyTelemetryAt(sample, now.Add(time.Second)) {
 		t.Fatal("losing VRAM validity should change effective telemetry")

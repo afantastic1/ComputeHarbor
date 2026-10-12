@@ -599,18 +599,16 @@ node scripts/spdx-headers.mjs
 ### 7.2 一期手工验收命令示意
 
 ```powershell
-# 以下只在 Gateway 认证已经实现且生成好本机 Client Token 后使用。
-# 应从受保护的凭据渠道注入 $env:PAIR_GATEWAY_CLIENT_TOKEN，别写到 git 仓库。
+# Gateway 只监听本机回环地址；云端授权使用 PAIR 已保存的 Provider Key。
 $base = 'http://127.0.0.1:14326/v1'
-$headers = @{ Authorization = "Bearer $env:PAIR_GATEWAY_CLIENT_TOKEN" }
-Invoke-RestMethod -Uri "$base/models" -Headers $headers -Method Get
+Invoke-RestMethod -Uri "$base/models" -Method Get
 
 $body = @{
   model = 'cloud/deepseek/deepseek-chat'
   messages = @(@{ role = 'user'; content = 'Reply with OK' })
   stream = $false
 } | ConvertTo-Json -Depth 12
-Invoke-RestMethod -Uri "$base/chat/completions" -Method Post -Headers $headers -ContentType 'application/json' -Body $body
+Invoke-RestMethod -Uri "$base/chat/completions" -Method Post -ContentType 'application/json' -Body $body
 ```
 
 `cloud/deepseek/deepseek-chat` 是本文拟定的**目标逻辑 ID**，配置前不会出现在当前仓库的目录中；这不是现成命令的功能承诺。

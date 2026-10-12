@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"nvpair-shared/noderec"
 	"nvpair-ui-broker/relay"
 )
 
@@ -155,68 +154,70 @@ func TestLMStudioFallbackDoesNotOverwriteKnownBackend(t *testing.T) {
 	}
 }
 
-func TestEngineAdvertiserTracksEngineHealth(t *testing.T) {
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer backend.Close()
-	_, portText, err := net.SplitHostPort(backend.Listener.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	backendPort, err := strconv.Atoi(portText)
-	if err != nil {
-		t.Fatal(err)
-	}
-	proxyPort := 44000
-	if backendPort == proxyPort {
-		proxyPort++
+func TestEngineAdvertisementProfilesAfterPortGatesContainEachEngineOnce(t *testing.T) {
+	counts := make(map[string]int)
+	for _, profile := range engineAdvertisementProfilesAfterPortGates() {
+		counts[profile.Name]++
 	}
 
-	profile := testDefaultEngineProxyProfile()
-	profile.DiscoveryService = noderec.ServiceLMStudio
-	b := brokerWithEngineProxyProfile(profile)
-	b.regCache = relay.NewRegistrationCache()
-	b.engineProxy(profile).backendPort.Store(int32(backendPort))
-	updates := attachAdvertiserProxy(t, b, profile, proxyPort)
-
-	b.reconcileAdvertiseEngine(profile, backend.Client())
-	registrations := b.regCache.Snapshot()
-	if len(registrations) != 1 || registrations[0].Service != profile.DiscoveryService ||
-		registrations[0].Port != proxyPort {
-		t.Fatalf("healthy registration = %+v, want %s on %d", registrations, profile.DiscoveryService, proxyPort)
+	for _, engine := range []string{"ollama", "lmstudio", "llamacpp", "strata"} {
+		if counts[engine] != 1 {
+			t.Errorf("%s advertisement profile count = %d, want 1", engine, counts[engine])
+		}
 	}
-	if got := <-updates; !got.Healthy || got.Port != backendPort || got.Engine != profile.Name {
-		t.Fatalf("healthy local backend = %+v", got)
-	}
-
-	backend.Close()
-	b.reconcileAdvertiseEngine(profile, backend.Client())
-	if got := b.regCache.Snapshot(); len(got) != 0 {
-		t.Fatalf("unhealthy engine remained advertised: %+v", got)
-	}
-	if got := <-updates; got.Healthy || got.Port != backendPort {
-		t.Fatalf("unhealthy local backend = %+v", got)
+	if counts["mnn"] != 0 {
+		t.Errorf("hosted MNN advertisement profile count = %d, want 0", counts["mnn"])
 	}
 }
 
-func TestEngineAdvertiserRejectsSelfForwardLoop(t *testing.T) {
-	profile := testDefaultEngineProxyProfile()
-	profile.DiscoveryService = noderec.ServiceLMStudio
-	b := brokerWithEngineProxyProfile(profile)
-	b.regCache = relay.NewRegistrationCache()
-	b.regCache.Register(noderec.RegisterParams{Service: profile.DiscoveryService, Port: 44000})
-	b.engineProxy(profile).backendPort.Store(44000)
-	updates := attachAdvertiserProxy(t, b, profile, 44000)
-
-	// A nil client proves the collision check short-circuits before probing the
-	// facade as though it were the backend.
-	b.reconcileAdvertiseEngine(profile, nil)
-	if got := b.regCache.Snapshot(); len(got) != 0 {
-		t.Fatalf("self-forwarding facade remained advertised: %+v", got)
+func TestStrataAdvertiserTracksConfiguredEndpointHealth(t *testing.T) {
+	isolateOllamaHostTestConfig(t)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("request path = %q, want /v1/models", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := w.Write([]byte(`{"data":[{"id":"qwen-local"}]}`)); err != nil {
+			t.Errorf("write model inventory: %v", err)
+		}
+	}))
+	t.Cleanup(backend.Close)
+	_, portText, err := net.SplitHostPort(backend.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("parse Strata test address: %v", err)
 	}
-	if got := <-updates; got.Healthy {
-		t.Fatalf("self-forwarding backend remained healthy: %+v", got)
+	backendPort, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatalf("parse Strata test port: %v", err)
+	}
+	settings := strataSettings{Enabled: true, Endpoint: backend.URL}
+	if err := saveStrataSettings(settings); err != nil {
+		t.Fatalf("save Strata settings: %v", err)
+	}
+
+	profile, ok := engineProxyProfileFor("strata")
+	if !ok {
+		t.Fatal("Strata proxy profile missing")
+	}
+	b := &Broker{regCache: relay.NewRegistrationCache()}
+	updates := attachAdvertiserProxy(t, b, profile, profile.FacadePort)
+
+	b.reconcileEngineAdvertisement(profile, backend.Client())
+	registrations := b.regCache.Snapshot()
+	if len(registrations) != 1 || registrations[0].Service != profile.DiscoveryService || registrations[0].Port != profile.FacadePort {
+		t.Fatalf("healthy Strata registration = %+v, want %s on %d", registrations, profile.DiscoveryService, profile.FacadePort)
+	}
+	if got := <-updates; !got.Healthy || got.Port != backendPort || got.Engine != profile.Name {
+		t.Fatalf("healthy Strata local backend = %+v", got)
+	}
+
+	backend.Close()
+	b.reconcileEngineAdvertisement(profile, backend.Client())
+	if got := b.regCache.Snapshot(); len(got) != 0 {
+		t.Fatalf("stopped Strata remained advertised: %+v", got)
+	}
+	if got := <-updates; got.Healthy || got.Port != backendPort {
+		t.Fatalf("stopped Strata local backend = %+v", got)
 	}
 }
 

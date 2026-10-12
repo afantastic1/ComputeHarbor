@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -215,5 +216,58 @@ func TestStrataModelListFanoutUsesConfiguredLoopbackAPIKey(t *testing.T) {
 	}
 	if status != http.StatusOK || recorder.Code != http.StatusOK {
 		t.Fatalf("model-list status = %d / %d, want 200", status, recorder.Code)
+	}
+}
+
+func TestStrataModelListBootstrapsFromLocalBackendWithoutDiscovery(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("upstream path = %q, want /v1/models", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer configured-key" {
+			t.Errorf("Authorization = %q, want configured Strata credential", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := w.Write([]byte(`{"object":"list","data":[{"id":"qwen-local","object":"model"}]}`)); err != nil {
+			t.Errorf("write model inventory: %v", err)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+	parsed, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("parse Strata backend URL: %v", err)
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil {
+		t.Fatalf("parse Strata backend port: %v", err)
+	}
+	profile, ok := profileFor("strata")
+	if !ok {
+		t.Fatal("Strata profile missing")
+	}
+	proxy := testProxy(profile, NewDiscovery(), profile.StandalonePort)
+	if err := proxy.soleFacade().setLocalBackend(localBackend{
+		Engine: "strata", Host: "127.0.0.1", Port: port, Healthy: true, APIKey: "configured-key",
+	}); err != nil {
+		t.Fatalf("set local Strata backend: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	request.RemoteAddr = "127.0.0.1:1234"
+	proxy.soleFacade().handlePlain(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("Strata model-list status = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var response struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode Strata model-list response: %v", err)
+	}
+	if len(response.Data) != 1 || response.Data[0].ID != "qwen-local" {
+		t.Fatalf("Strata model-list response = %+v, want qwen-local", response.Data)
 	}
 }

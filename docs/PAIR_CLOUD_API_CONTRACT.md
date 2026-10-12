@@ -97,6 +97,8 @@ Cloud POSTs are not automatically retried, including after 429, 5xx, timeout,
 or uncertain response delivery. Provider errors are translated to static typed
 messages so response bodies, secrets, and sensitive URL components are not
 returned to callers.
+PAIR waits up to two minutes for Provider response headers. A timeout before
+the headers arrive is reported as `504 provider_timeout`.
 
 ## Credentials, authorization, and budgets
 
@@ -109,20 +111,18 @@ keys with `safeStorage`; only process memory receives decrypted material.
 provider. Provider removal prunes the runtime credential and its encrypted
 vault entry.
 
-PAIR's local Gateway client token and the upstream provider key are separate
-credentials. Enabling paid cloud use requires explicit local authorization and
-budget policy. mTLS pairing alone does not authorize a peer to spend cloud
-budget. Cloud routing defaults off. Requests rejected for disabled cloud,
-missing authorization, insufficient budget, or unsupported capability make no
-upstream request.
+The local Gateway listens only on loopback. Local clients do not need a second
+Gateway credential in addition to the Provider key already stored by PAIR.
+Enabling paid Cloud use requires explicit routing policy and budget settings;
+mTLS pairing alone does not authorize a peer to spend Cloud budget. Cloud
+routing defaults off. Requests rejected for disabled Cloud, a missing Provider
+credential, insufficient budget, or unsupported capability make no upstream
+request.
 
-The initial local Gateway token is read from `PAIR_GATEWAY_CLIENT_TOKEN` and
-must contain at least 32 characters. Once Cloud is enabled, `/v1/models` and
-Cloud-capable chat routes require that token; `/healthz` reveals only liveness.
-Cloud authorization also requires positive monthly and per-request USD limits.
+Cloud authorization requires positive monthly and per-request USD limits.
 Before dispatch, PAIR durably reserves the configured per-request ceiling in
 the local budget ledger. Until a model price table is configured, the ceiling
-is charged conservatively because provider usage alone does not establish a
+is charged conservatively because Provider usage alone does not establish a
 cost; unknown cost is never recorded as zero.
 
 Cross-node execution uses a terminal mTLS protocol. The host advertises only

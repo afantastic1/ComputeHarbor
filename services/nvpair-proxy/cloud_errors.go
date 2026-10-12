@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"errors"
+	"net"
 )
 
 type cloudErrorCode string
@@ -75,11 +76,14 @@ func cloudErrorCodeOf(err error) (cloudErrorCode, bool) {
 }
 
 func cloudTransportError(err error) error {
+	var networkError net.Error
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		return newCloudAdapterError(cloudErrProviderTimeout, err)
 	case errors.Is(err, context.Canceled):
 		return newCloudAdapterError(cloudErrProviderCanceled, err)
+	case errors.As(err, &networkError) && networkError.Timeout():
+		return newCloudAdapterError(cloudErrProviderTimeout, err)
 	default:
 		return newCloudAdapterError(cloudErrProviderError, err)
 	}

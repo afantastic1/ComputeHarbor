@@ -153,9 +153,8 @@ func scoreCandidate(policy string, candidate RuntimeModel) float64 {
 		}
 		pending = 1 / (1 + float64(pendingCount))
 	}
-	effectivePressure, pressureKnown := highestKnownPressure(candidate)
-	if pressureKnown {
-		resourcePressure = 1 - clamp(float64(effectivePressure)/3)
+	if candidate.GPUPressureKnown {
+		resourcePressure = 1 - clamp(float64(candidate.GPUPressure)/3)
 	}
 	network := unknownSignalScore
 	if candidate.NetworkCost > 0 {
@@ -175,20 +174,6 @@ func scoreCandidate(policy string, candidate RuntimeModel) float64 {
 			balancedWeights.network*network + balancedWeights.pressure*pressure + balancedWeights.pending*pending +
 			balancedWeights.gpuPressure*resourcePressure
 	}
-}
-
-func highestKnownPressure(candidate RuntimeModel) (int, bool) {
-	pressure := 0
-	known := false
-	if candidate.GPUPressureKnown {
-		pressure = candidate.GPUPressure
-		known = true
-	}
-	if candidate.VRAMPressureKnown && (!known || candidate.VRAMPressure > pressure) {
-		pressure = candidate.VRAMPressure
-		known = true
-	}
-	return pressure, known
 }
 
 func effectiveCapabilities(candidate RuntimeModel) map[string]bool {

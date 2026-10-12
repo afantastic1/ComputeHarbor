@@ -1239,6 +1239,10 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		routingModel = model
 	}
 	candidates := f.resolveCandidates(routingModel)
+	matchedRoute, matched := f.profile.routeFor(r.Method, r.URL.Path)
+	if matched && matchedRoute.Role.isModelList() && f.profile.Name == "strata" {
+		candidates = f.includeLocalStrataModelCandidate(candidates)
+	}
 	if cors.IsPreflight(r) {
 		targets := make([]cors.Target, 0, len(candidates))
 		for _, cand := range candidates {
@@ -1279,7 +1283,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		p.releaseReservation(held)
 		held = reservation{}
 	}()
-	if matchedRoute, ok := f.profile.routeFor(r.Method, r.URL.Path); ok && matchedRoute.Role.isModelList() {
+	if matched && matchedRoute.Role.isModelList() {
 		if len(candidates) > 0 {
 			_ = f.notify("proxy/request-started", RequestStartedEvent{
 				ID: reqID, Method: r.Method, Path: r.URL.Path, Target: "cluster",
@@ -2000,6 +2004,30 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	// ErrAbortHandler panic that a mid-copy error raises.
 }
 
+// includeLocalStrataModelCandidate keeps Strata's advertised model inventory
+// available while discovery is bootstrapping. The scanner asks the local
+// Strata facade for /v1/models, but that request is also what gives discovery
+// the model inventory used to select candidates. Supplying the already-probed
+// loopback backend breaks that cycle. When discovery already resolved this
+// node to the same backend, its candidate (and credentials) remain authoritative.
+func (f *facade) includeLocalStrataModelCandidate(candidates []candidate) []candidate {
+	target, healthy := f.localBackendTarget()
+	if !healthy {
+		return candidates
+	}
+	for _, candidate := range candidates {
+		if candidate.url != nil && candidate.url.Scheme == target.Scheme && candidate.url.Host == target.Host {
+			return candidates
+		}
+	}
+	backend := f.currentLocalBackend()
+	return append(candidates, candidate{
+		id:          "local-strata",
+		url:         target,
+		localAPIKey: backend.APIKey,
+	})
+}
+
 // resolveCandidates returns the ordered list of nodes to try for the current
 // request. A model-bearing request first filters a request-local node copy to
 // advertised owners. A user-selected eligible node then leads, followed by
@@ -2221,7 +2249,7 @@ func (p *Proxy) reserveCandidate(f *facade, candidates []candidate) ([]candidate
 			continue
 		}
 		load := uint64(p.priorityPending[id]) +
-			uint64(max(p.priorityGPUPressure[id], p.priorityVRAMPressure[id])) +
+			uint64(p.priorityGPUPressure[id]) +
 			uint64(p.priorityReservations[id])
 		if bestIndex < 0 || load < bestLoad || (load == bestLoad && order < bestOrder) {
 			bestIndex = index

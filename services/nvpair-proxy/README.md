@@ -117,10 +117,16 @@ clients use `8080`, while the managed `llama-server` stays on `8081`.
 
 The Strata facade is the externally managed local engine route. It exposes
 `GET /v1/models` and `POST /v1/chat/completions`; streaming chat and tool calls
-are supported. Vision input and structured output remain gated because those
-request capabilities have not been verified for Strata. PAIR discovers model
-IDs from Strata's OpenAI-compatible model list and does not own the Strata
-process.
+are supported. The Gateway also routes tool requests to LM Studio's
+OpenAI-compatible endpoint. Vision input and structured output remain gated
+because those request capabilities have not been verified for Strata. PAIR
+discovers model IDs from Strata's OpenAI-compatible model list and does not own
+the Strata process.
+
+The Strata model-list route includes the configured healthy loopback backend
+even before discovery has published this node's model inventory. This lets the
+scanner learn the inventory through the facade without a discovery bootstrap
+cycle.
 
 A facade listens on its enabled port and forwards incoming requests to the
 currently active node — except the model-list routes, which are queried across

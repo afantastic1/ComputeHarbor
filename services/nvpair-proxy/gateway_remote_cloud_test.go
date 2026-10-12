@@ -64,13 +64,11 @@ func TestPairedCloudGatewayRequiresExplicitHostAuthorization(t *testing.T) {
 	peer := nodeFor(t, "host", server.URL)
 	peer.ClusterUUID = "b"
 	caller.soleFacade().discovery.SetSubscribed([]Node{peer})
-	caller.gatewayDispatcher.setClientToken("local-client-token-12345678901234567890")
 	caller.gatewayDispatcher.settings.Store(&gatewayRoutingSettings{cloudEnabled: true, policy: gatewayPolicyPreferLocal})
 	call := func() *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:14326/v1/chat/completions", strings.NewReader(
 			`{"model":"cloud/deepseek/deepseek-chat","messages":[]}`,
 		))
-		request.Header.Set("Authorization", "Bearer local-client-token-12345678901234567890")
 		response := httptest.NewRecorder()
 		caller.serveGateway(response, request)
 		return response
@@ -169,13 +167,11 @@ func TestPairedCloudAuthorizationRevocationCancelsActiveProviderRequest(t *testi
 	peer := nodeFor(t, "host", hostServer.URL)
 	peer.ClusterUUID = "b"
 	caller.soleFacade().discovery.SetSubscribed([]Node{peer})
-	caller.gatewayDispatcher.setClientToken("local-client-token-12345678901234567890")
 	caller.gatewayDispatcher.settings.Store(&gatewayRoutingSettings{cloudEnabled: true, policy: gatewayPolicyPreferLocal})
 	requestContext, cancelRequest := context.WithCancel(context.Background())
 	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:14326/v1/chat/completions", strings.NewReader(
 		`{"model":"cloud/deepseek/deepseek-chat","messages":[],"stream":true}`,
 	)).WithContext(requestContext)
-	request.Header.Set("Authorization", "Bearer local-client-token-12345678901234567890")
 	response := httptest.NewRecorder()
 	requestDone := make(chan struct{})
 	go func() {

@@ -182,17 +182,26 @@ another engine's working listener with it.
 Cloud routing has three persisted policies: `local_only`, `prefer_local`, and
 `cloud_only`. `local_only` rejects explicit `cloud/...` IDs and `auto-cloud`.
 `prefer_local` keeps automatic aliases on a compatible local deployment unless
-there is no compatible, routable local deployment or every such deployment has
-fresh, known GPU or VRAM pressure at `schedulerwire.MaxGPUPressure`. Either
-known saturated signal marks that candidate saturated. A candidate with no
-saturated signal and either signal unknown has unknown capacity; unknown
-capacity, CPU inference, pending work, and in-flight reservations do not count as busy.
-Only then may `allowPaidFallback` permit an automatic alias to use the one
-configured `fallbackCloudModel`. `cloud_only` sends automatic aliases directly
+there is no compatible, routable local deployment or every such deployment
+already has inference work pending or in flight. Pending means scheduler-counted
+`queued` or `running` work; process-wide proxy reservations account for dispatches
+not yet reflected in a scheduler snapshot. A deployment with zero or unknown
+pending work keeps the request local. GPU and VRAM pressure do not determine
+whether a deployment is busy. Only when every compatible deployment is busy may
+`allowPaidFallback` permit an automatic alias to use the one configured
+`fallbackCloudModel`. `cloud_only` sends automatic aliases directly
 to that same configured model. `auto-cloud` is an explicit Cloud request and
 does not depend on `allowPaidFallback`, but still requires Cloud to be enabled,
-Gateway authentication, Provider credentials, paired-node authorization where
-applicable, and a successful budget reservation.
+Provider credentials, paired-node authorization where applicable, and a
+successful budget reservation. The Gateway listener is loopback-only, so local
+clients do not provide a second credential in addition to the Provider key
+stored by PAIR.
+
+This decision applies to the incoming request only. Routing a later request to
+Cloud does not cancel or replace local inference already in progress. If Cloud
+cannot be used before a Provider request is sent, the new request may fall back
+to its selected local route. Once sent, a Provider error is returned without
+replaying the request locally because Cloud may already have executed it.
 
 The fallback ID must be a canonical `cloud/...` ID and is resolved against the
 local Cloud Registry at request time. A missing or disabled selection returns an
@@ -591,10 +600,11 @@ approve. See README.md for the complete forwarding and intersection rules.
 
 A reservation is one in-flight dispatch this process has made since the last
 scheduler snapshot. Estimated load for a node is
-`pending + max(gpuPressure, vramPressure) + reservations`; the scheduler supplies
-the first three resource values. The scheduler reports whether each pressure
-reflects fresh telemetry separately from its numeric value; consumers must not
-infer freshness from the pressure band alone.
+`pending + gpuPressure + reservations`; the scheduler supplies these values.
+VRAM pressure remains in snapshots for telemetry but does not affect target
+ordering. The scheduler reports whether each pressure reflects fresh telemetry
+separately from its numeric value; consumers must not infer freshness from the
+pressure band alone.
 
 - **Taken** when a candidate is chosen, unless an eligible manual pin applies,
   and re-taken through the same path on each retry round (§5.1).
@@ -666,9 +676,12 @@ Strata is an externally managed local engine. PAIR never installs, starts, or
 stops it. Its loopback endpoint is configured in the broker; the `:8082` facade
 is advertised only while that endpoint is enabled and healthy. The verified
 routes are `GET /v1/models` and `POST /v1/chat/completions` (including SSE and
-tool calls). Image input and structured JSON output remain rejected until
-verified against Strata. Discovered model IDs are used exactly; PAIR does not
-infer model names or capabilities.
+tool calls). The Gateway also accepts tool-call requests for LM Studio models.
+Image input and structured JSON output remain rejected until verified against
+Strata. Discovered model IDs are used exactly; PAIR does not infer model names.
+The model-list route also queries the configured healthy loopback backend when
+discovery has not yet published this node's inventory, allowing the scanner to
+bootstrap Strata model discovery through the facade.
 | | Ollama | LM Studio | MNN (Android) |
 | --- | --- | --- | --- |
 | Engine's own client-facing port | 11434 | 1234 | 14325 |

@@ -213,7 +213,7 @@ func TestRank_CombinesPendingAndGPUPressure(t *testing.T) {
 	}
 }
 
-func TestRank_UsesMaximumKnownGPUOrVRAMPressure(t *testing.T) {
+func TestRank_UsesGPUPressureAndIgnoresVRAMForOrdering(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	m := mgrWith(nopRW{}, []string{"gpu-busy", "vram-busy", "idle"})
 	for _, sample := range []noderec.NodeTelemetry{
@@ -225,7 +225,7 @@ func TestRank_UsesMaximumKnownGPUOrVRAMPressure(t *testing.T) {
 	}
 
 	order, ranks := m.rankAt(now)
-	assertStrs(t, order, []string{"idle", "gpu-busy", "vram-busy"})
+	assertStrs(t, order, []string{"idle", "vram-busy", "gpu-busy"})
 	if vramPressureOf(ranks, "vram-busy") != 3 || !knownVRAMPressureOf(ranks, "vram-busy") {
 		t.Fatalf("VRAM pressure snapshot = %+v, want vram-busy at known pressure 3", ranks)
 	}

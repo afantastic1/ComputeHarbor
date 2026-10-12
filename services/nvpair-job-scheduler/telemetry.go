@@ -113,15 +113,6 @@ func (m *Manager) vramPressureAt(hostUUID string, now time.Time) int {
 	return pressure
 }
 
-func (m *Manager) resourcePressureAt(hostUUID string, now time.Time) int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	state, ok := m.telemetry[hostUUID]
-	gpuPressure, gpuKnown := gpuPressureSnapshot(state, ok, now)
-	vramPressure, vramKnown := vramPressureSnapshot(state, ok, now)
-	return effectiveResourcePressure(gpuPressure, gpuKnown, vramPressure, vramKnown)
-}
-
 func gpuPressureSnapshot(state gpuTelemetryState, exists bool, now time.Time) (int, bool) {
 	known := exists && telemetryFreshAt(state, now)
 	if !known {
@@ -136,20 +127,6 @@ func vramPressureSnapshot(state gpuTelemetryState, exists bool, now time.Time) (
 		return unknownGPUPressure, false
 	}
 	return state.vramPressure, true
-}
-
-func effectiveResourcePressure(gpuPressure int, gpuKnown bool, vramPressure int, vramKnown bool) int {
-	if !gpuKnown && !vramKnown {
-		return unknownGPUPressure
-	}
-	effective := 0
-	if gpuKnown {
-		effective = gpuPressure
-	}
-	if vramKnown && vramPressure > effective {
-		effective = vramPressure
-	}
-	return effective
 }
 
 func telemetryFreshAt(state gpuTelemetryState, now time.Time) bool {

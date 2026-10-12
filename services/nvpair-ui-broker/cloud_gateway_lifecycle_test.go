@@ -24,7 +24,6 @@ func TestCloudOnlyGatewayStartsWithoutFacadesAndRestoresAfterRestart(t *testing.
 
 	temporaryRoot := t.TempDir()
 	t.Setenv("LOCALAPPDATA", filepath.Join(temporaryRoot, "appdata"))
-	t.Setenv("PAIR_GATEWAY_CLIENT_TOKEN", "broker-cloud-test-token-12345678901234567890")
 	settings := defaultCloudProvidersSettings()
 	settings.Config = json.RawMessage(`{"schema_version":1,"providers":[{"id":"test-provider","protocol":"openai_chat_completions","base_url":"https://api.openai.com/v1","auth_ref":"test-vault:provider","enabled":true,"models":[{"public_id":"cloud/test/chat","upstream_id":"test-chat","capabilities":["chat","streaming"]}]}]}`)
 	settings.CloudEnabled = true

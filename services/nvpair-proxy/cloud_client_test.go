@@ -385,6 +385,30 @@ func TestCloudClientCancelsUpstreamWhenCallerCancels(t *testing.T) {
 	}
 }
 
+func TestCloudClientClassifiesResponseHeaderTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+	}))
+	defer server.Close()
+
+	provider := cloudProviderRuntime{ID: "p", Protocol: "openai_chat_completions", BaseURL: server.URL, Enabled: true}
+	target := cloudModelTarget{PublicID: "cloud/p/model", ProviderID: "p", UpstreamID: "upstream", Enabled: true}
+	client := newCloudHTTPClient(cloudHTTPOptions{allowLoopback: true, responseHeaderTimeout: 20 * time.Millisecond})
+
+	_, err := client.DoChat(context.Background(), provider, target, target.PublicID, "secret", []byte(`{"model":"cloud/p/model","messages":[]}`))
+	if err == nil {
+		t.Fatal("DoChat returned nil error after the response-header deadline")
+	}
+	code, ok := cloudErrorCodeOf(err)
+	if !ok || code != cloudErrProviderTimeout {
+		t.Fatalf("response-header timeout code=%q, ok=%v, want %q", code, ok, cloudErrProviderTimeout)
+	}
+	status, _, kind := mapCloudGatewayError(err)
+	if status != http.StatusGatewayTimeout || kind != "provider_timeout" {
+		t.Fatalf("Gateway timeout mapping=(%d, %q), want (%d, %q)", status, kind, http.StatusGatewayTimeout, "provider_timeout")
+	}
+}
+
 func TestCloudClientPreservesSSEAndRejectsTruncatedOrOversizedEvents(t *testing.T) {
 	for _, test := range []struct {
 		name         string

@@ -57,10 +57,11 @@ below 40%, 1 from 40–69%, 2 from 70–84%, and 3 at 85% or above. Downward
 transitions use 35%, 65%, and 80% thresholds to avoid rank thrash. A signal is
 unknown when it is invalid, missing, or older than ten seconds.
 
-Nodes are sorted by `pending + max(known gpuPressure, known vramPressure)`, then
-lower effective pressure, then stable node ID. When both signals are unknown,
-effective pressure is the neutral value 1. Pending counts include **all** engines together, so work through
-one facade affects every other facade's ordering.
+Nodes are sorted by `pending + gpuPressure`, then lower GPU pressure, then stable
+node ID. VRAM pressure remains in snapshots for telemetry, but does not affect
+ordering. When GPU telemetry is unknown, its neutral pressure is 1. Pending
+counts include **all** engines together, so work through one facade affects
+every other facade's ordering.
 
 Rankings are recomputed when the node set, catalog, or effective pressure
 changes, and reconciled on the interval timer. A ranking is only emitted when

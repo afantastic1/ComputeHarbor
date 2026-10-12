@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"nvpair-shared/modelselection"
 	"nvpair-shared/schedulerwire"
@@ -177,13 +178,39 @@ func TestGatewayInventoryRetainsEveryModelDeploymentAndFreshNodeResources(t *tes
 		byNode[candidate.NodeID] = candidate
 	}
 	if byNode["pc-a"].PendingRequests != 2 || !byNode["pc-a"].PendingKnown || byNode["pc-a"].GPUPressure != 3 || !byNode["pc-a"].GPUPressureKnown ||
-		byNode["pc-a"].VRAMPressure != 2 || !byNode["pc-a"].VRAMPressureKnown ||
+		byNode["pc-a"].VRAMPressureKnown ||
 		byNode["pc-a"].MemoryPressure != 0 || byNode["pc-a"].AvailableMemoryBytes != 0 {
-		t.Errorf("pc-a resource signals = %+v, want pending=2 GPU pressure=3 VRAM pressure=2 and unknown memory", byNode["pc-a"])
+		t.Errorf("pc-a Gateway resource signals = %+v, want pending=2 GPU pressure=3, no VRAM ranking signal, and unknown memory", byNode["pc-a"])
 	}
 	if byNode["pc-b"].PendingRequests != 0 || !byNode["pc-b"].PendingKnown || byNode["pc-b"].GPUPressure != 0 || !byNode["pc-b"].GPUPressureKnown ||
-		byNode["pc-b"].VRAMPressure != 0 || !byNode["pc-b"].VRAMPressureKnown {
-		t.Errorf("pc-b resource signals = %+v, want known idle values", byNode["pc-b"])
+		byNode["pc-b"].VRAMPressureKnown {
+		t.Errorf("pc-b Gateway resource signals = %+v, want known idle pending/GPU values and no VRAM ranking signal", byNode["pc-b"])
+	}
+}
+
+func TestGatewayAutoSelectionDoesNotUseVRAMPressureForNodeOrdering(t *testing.T) {
+	proxy := NewProxy(nil)
+	ollama, _ := profileFor("ollama")
+	serverA := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(serverA.Close)
+	serverB := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(serverB.Close)
+	discovery := NewDiscovery()
+	discovery.AddManual(nodeForModel(t, "pc-a", serverA.URL, "model-8b"))
+	discovery.AddManual(nodeForModel(t, "pc-b", serverB.URL, "model-8b"))
+	proxy.facades = map[string]*facade{"ollama": newFacade(proxy, ollama, discovery, 11435)}
+	proxy.SetPrioritySnapshot(schedulerwire.Priority{
+		Generation: 1,
+		Nodes:      []string{"pc-a", "pc-b"},
+		Ranks: []schedulerwire.NodeRank{
+			{ID: "pc-a", Pending: 0, VRAMPressure: schedulerwire.MaxGPUPressure, VRAMPressureKnown: true},
+			{ID: "pc-b", Pending: 0, VRAMPressure: 0, VRAMPressureKnown: true},
+		},
+	})
+
+	selection := proxy.resolveGatewayModel(AUTO_ALIAS, nil)
+	if selection == nil || selection.NodeID != "pc-a" {
+		t.Fatalf("auto selection = %+v, want stable ID tie-break pc-a regardless of VRAM pressure", selection)
 	}
 }
 
@@ -684,7 +711,6 @@ func TestGatewayChatRoutesExplicitModelThroughEngineFacade(t *testing.T) {
 	discovery.AddManual(nodeForModel(t, "pc-private", upstream.URL, "qwen3-8b"))
 	p := newTestProxy(ollama, NewCodec(rwNop{}), discovery, 11435)
 	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:14326/v1/chat/completions", strings.NewReader(`{"model":"qwen3-8b","messages":[]}`))
-	request.Header.Set("Authorization", "Bearer arbitrary-placeholder-or-client-key")
 	response := httptest.NewRecorder()
 	p.serveGateway(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "routed") {
@@ -818,34 +844,6 @@ func TestAutoCloudRequiresConfiguredFallbackModel(t *testing.T) {
 	}
 }
 
-func TestGatewayCloudAuthorizationCoversOnlyAliasesThatCanCallCloud(t *testing.T) {
-	tests := []struct {
-		name              string
-		policy            gatewayPolicy
-		allowPaidFallback bool
-		model             string
-		wantAuthorization bool
-	}{
-		{name: "explicit auto-cloud remains authorized when paid fallback switch is off", policy: gatewayPolicyPreferLocal, model: AUTO_CLOUD_ALIAS, wantAuthorization: true},
-		{name: "automatic prefer-local route is authorized when paid fallback is enabled", policy: gatewayPolicyPreferLocal, allowPaidFallback: true, model: AUTO_ALIAS, wantAuthorization: true},
-		{name: "automatic prefer-local route needs no cloud auth when fallback is off", policy: gatewayPolicyPreferLocal, model: AUTO_ALIAS},
-		{name: "forced local alias needs no cloud authorization", policy: gatewayPolicyPreferLocal, model: AUTO_LOCAL_ALIAS},
-		{name: "local-only auto-cloud is rejected before cloud authorization", policy: gatewayPolicyLocalOnly, model: AUTO_CLOUD_ALIAS},
-		{name: "cloud-only automatic route requires authorization", policy: gatewayPolicyCloudOnly, model: AUTO_ALIAS, wantAuthorization: true},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			proxy := NewProxy(nil)
-			proxy.gatewayDispatcher.settings.Store(&gatewayRoutingSettings{
-				cloudEnabled: true, policy: test.policy, allowPaidFallback: test.allowPaidFallback,
-			})
-			if got := proxy.gatewayDispatcher.requiresCloudAuthorization(test.model); got != test.wantAuthorization {
-				t.Fatalf("authorization required=%v, want %v", got, test.wantAuthorization)
-			}
-		})
-	}
-}
-
 func TestPreferLocalAutoUsesCloudOnlyForNoCapacityOrEntirelyBusyLocalInventory(t *testing.T) {
 	const model = "qwen3-8b"
 	tests := []struct {
@@ -857,27 +855,27 @@ func TestPreferLocalAutoUsesCloudOnlyForNoCapacityOrEntirelyBusyLocalInventory(t
 		reserveOnNode     bool
 	}{
 		{
-			name:              "all compatible deployments are busy",
+			name:              "every compatible deployment has an inference task",
 			deployments:       []string{"pc-a"},
-			ranks:             []schedulerwire.NodeRank{{ID: "pc-a", GPUPressure: schedulerwire.MaxGPUPressure, GPUPressureKnown: true}},
+			ranks:             []schedulerwire.NodeRank{{ID: "pc-a", Pending: 1}},
 			allowPaidFallback: true, wantCloud: true,
 		},
 		{
-			name:        "VRAM saturation uses cloud with low GPU pressure",
+			name:        "VRAM pressure alone keeps an idle local deployment eligible",
 			deployments: []string{"pc-a"},
 			ranks: []schedulerwire.NodeRank{{
 				ID: "pc-a", GPUPressure: 0, GPUPressureKnown: true,
 				VRAMPressure: schedulerwire.MaxGPUPressure, VRAMPressureKnown: true,
 			}},
-			allowPaidFallback: true, wantCloud: true,
+			allowPaidFallback: true,
 		},
 		{
-			name:        "VRAM saturation uses cloud with unknown GPU pressure",
+			name:        "VRAM pressure with unknown pending work does not trigger Cloud",
 			deployments: []string{"pc-a"},
 			ranks: []schedulerwire.NodeRank{{
 				ID: "pc-a", VRAMPressure: schedulerwire.MaxGPUPressure, VRAMPressureKnown: true,
 			}},
-			allowPaidFallback: true, wantCloud: true,
+			allowPaidFallback: true,
 		},
 		{
 			name:              "unknown telemetry keeps the request local",
@@ -886,10 +884,10 @@ func TestPreferLocalAutoUsesCloudOnlyForNoCapacityOrEntirelyBusyLocalInventory(t
 			allowPaidFallback: true,
 		},
 		{
-			name:              "pending requests and reservations do not imply GPU saturation",
+			name:              "pending inference work and reservations allow Cloud fallback",
 			deployments:       []string{"pc-a"},
-			ranks:             []schedulerwire.NodeRank{{ID: "pc-a", Pending: 100, GPUPressure: 0, GPUPressureKnown: true}},
-			allowPaidFallback: true, reserveOnNode: true,
+			ranks:             []schedulerwire.NodeRank{{ID: "pc-a", Pending: 1, GPUPressure: 0, GPUPressureKnown: true}},
+			allowPaidFallback: true, wantCloud: true, reserveOnNode: true,
 		},
 		{
 			name:              "low GPU pressure with unknown VRAM keeps the request local",
@@ -901,9 +899,14 @@ func TestPreferLocalAutoUsesCloudOnlyForNoCapacityOrEntirelyBusyLocalInventory(t
 			name:        "one idle deployment keeps the request local",
 			deployments: []string{"pc-a", "pc-b"},
 			ranks: []schedulerwire.NodeRank{
-				{ID: "pc-a", GPUPressure: schedulerwire.MaxGPUPressure, GPUPressureKnown: true},
+				{ID: "pc-a", Pending: 2, GPUPressure: schedulerwire.MaxGPUPressure, GPUPressureKnown: true},
 				{ID: "pc-b", GPUPressure: 0, GPUPressureKnown: true, VRAMPressure: 0, VRAMPressureKnown: true},
 			},
+			allowPaidFallback: true,
+		},
+		{
+			name:              "unknown pending work prevents paid fallback",
+			deployments:       []string{"pc-a"},
 			allowPaidFallback: true,
 		},
 		{
@@ -912,9 +915,9 @@ func TestPreferLocalAutoUsesCloudOnlyForNoCapacityOrEntirelyBusyLocalInventory(t
 			wantCloud:         true,
 		},
 		{
-			name:        "busy local deployment stays local when paid fallback is disabled",
+			name:        "all local work stays local when paid fallback is disabled",
 			deployments: []string{"pc-a"},
-			ranks:       []schedulerwire.NodeRank{{ID: "pc-a", GPUPressure: schedulerwire.MaxGPUPressure, GPUPressureKnown: true}},
+			ranks:       []schedulerwire.NodeRank{{ID: "pc-a", Pending: 1, GPUPressure: schedulerwire.MaxGPUPressure, GPUPressureKnown: true}},
 		},
 	}
 	for _, test := range tests {
@@ -1018,7 +1021,16 @@ func TestPreferLocalAutoKeepsAndroidMNNCandidateLocalWhenGPUPressureIsUnknown(t 
 	}
 }
 
-func TestGatewayBusyLocalInventoryCallsOnlyConfiguredCloudModel(t *testing.T) {
+func TestGatewayBusyLocalInferenceContinuesWhileNextRequestUsesCloud(t *testing.T) {
+	localStarted := make(chan struct{})
+	finishLocal := make(chan struct{})
+	localFinished := make(chan struct{})
+	var finishLocalOnce sync.Once
+	releaseLocal := func() {
+		finishLocalOnce.Do(func() { close(finishLocal) })
+	}
+	defer releaseLocal()
+
 	var cloudHits atomic.Int32
 	cloudServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cloudHits.Add(1)
@@ -1037,9 +1049,12 @@ func TestGatewayBusyLocalInventoryCallsOnlyConfiguredCloudModel(t *testing.T) {
 	t.Cleanup(cloudServer.Close)
 
 	var localHits atomic.Int32
-	localServer := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	localServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			localHits.Add(1)
+			close(localStarted)
+			<-finishLocal
+			_, _ = io.WriteString(w, `{"message":{"content":"local result"}}`)
 		}
 	}))
 	t.Cleanup(localServer.Close)
@@ -1055,7 +1070,6 @@ func TestGatewayBusyLocalInventoryCallsOnlyConfiguredCloudModel(t *testing.T) {
 	}
 	proxy.gatewayDispatcher.client = newCloudHTTPClient(cloudHTTPOptions{allowLoopback: true})
 	proxy.gatewayDispatcher.resolveCredential = func(string) (string, error) { return "provider-key", nil }
-	proxy.gatewayDispatcher.setClientToken("local-client-token-12345678901234567890")
 	budget, err := newCloudBudgetLedger(filepath.Join(t.TempDir(), "budget.json"))
 	if err != nil {
 		t.Fatalf("create Cloud budget ledger: %v", err)
@@ -1074,16 +1088,30 @@ func TestGatewayBusyLocalInventoryCallsOnlyConfiguredCloudModel(t *testing.T) {
 	discovery := NewDiscovery()
 	discovery.AddManual(nodeForModel(t, "pc", localServer.URL, "qwen3-8b"))
 	proxy.facades = map[string]*facade{"ollama": newFacade(proxy, ollama, discovery, 11435)}
+	localFacade := proxy.facades["ollama"]
+	localRequest := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:11435/api/chat", strings.NewReader(
+		`{"model":"qwen3-8b","messages":[{"role":"user","content":"first"}]}`,
+	))
+	localResponse := httptest.NewRecorder()
+	go func() {
+		localFacade.handleHTTP(localResponse, localRequest)
+		close(localFinished)
+	}()
+	select {
+	case <-localStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("local inference did not start")
+	}
+
 	proxy.SetPrioritySnapshot(schedulerwire.Priority{
 		Generation: 1,
 		Nodes:      []string{"pc"},
-		Ranks:      []schedulerwire.NodeRank{{ID: "pc", GPUPressure: schedulerwire.MaxGPUPressure, GPUPressureKnown: true}},
+		Ranks:      []schedulerwire.NodeRank{{ID: "pc", Pending: 1}},
 	})
 
 	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:14326/v1/chat/completions", strings.NewReader(
 		`{"model":"auto-best","messages":[{"role":"user","content":"hello"}]}`,
 	))
-	request.Header.Set("Authorization", "Bearer local-client-token-12345678901234567890")
 	response := httptest.NewRecorder()
 	proxy.serveGateway(response, request)
 	if response.Code != http.StatusOK {
@@ -1092,8 +1120,22 @@ func TestGatewayBusyLocalInventoryCallsOnlyConfiguredCloudModel(t *testing.T) {
 	if got := cloudHits.Load(); got != 1 {
 		t.Fatalf("Cloud requests=%d, want one configured fallback request", got)
 	}
-	if got := localHits.Load(); got != 0 {
-		t.Fatalf("local requests=%d, want no local dispatch after saturated selection", got)
+	if got := localHits.Load(); got != 1 {
+		t.Fatalf("local requests=%d, want only the already-running local inference", got)
+	}
+	select {
+	case <-localFinished:
+		t.Fatal("existing local inference finished before its backend was released")
+	default:
+	}
+	releaseLocal()
+	select {
+	case <-localFinished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("existing local inference did not finish after its backend was released")
+	}
+	if localResponse.Code != http.StatusOK {
+		t.Fatalf("existing local response=%d %s, want success", localResponse.Code, localResponse.Body.String())
 	}
 
 	transport.mu.Lock()
@@ -1103,14 +1145,21 @@ func TestGatewayBusyLocalInventoryCallsOnlyConfiguredCloudModel(t *testing.T) {
 	for _, line := range lines {
 		var notification struct {
 			Method string `json:"method"`
+			Params struct {
+				WorkloadInfo struct {
+					ProviderID string `json:"providerId"`
+				} `json:"workloadInfo"`
+			} `json:"params"`
 		}
 		if err := json.Unmarshal(line, &notification); err != nil {
-			t.Fatalf("decode Cloud workload notification: %v", err)
+			t.Fatalf("decode workload notification: %v", err)
 		}
-		methods = append(methods, notification.Method)
+		if notification.Params.WorkloadInfo.ProviderID == "provider" {
+			methods = append(methods, notification.Method)
+		}
 	}
 	if want := []string{workloadSubmittedMethod, workloadStartedMethod, workloadCompletedMethod}; !reflect.DeepEqual(methods, want) {
-		t.Fatalf("Cloud workload lifecycle=%v, want %v", methods, want)
+		t.Fatalf("Cloud workload lifecycle=%v, want %v; notifications=%s", methods, want, bytes.Join(lines, []byte{'\n'}))
 	}
 }
 
@@ -1281,11 +1330,9 @@ func TestGatewayRoutesAuthorizedCloudModelAndMapsPublicModelID(t *testing.T) {
 	}
 	proxy.gatewayDispatcher.budget = budget
 	proxy.gatewayDispatcher.resolveCredential = func(string) (string, error) { return "provider-test-key", nil }
-	proxy.gatewayDispatcher.setClientToken("local-client-token-12345678901234567890")
 	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:14326/v1/chat/completions", strings.NewReader(
 		`{"model":"cloud/deepseek/deepseek-chat","messages":[{"role":"user","content":"hello"}]}`,
 	))
-	request.Header.Set("Authorization", "Bearer local-client-token-12345678901234567890")
 	response := httptest.NewRecorder()
 	proxy.serveGateway(response, request)
 	if response.Code != http.StatusOK {
@@ -1355,12 +1402,10 @@ func TestGatewaySupportsTwoTurnAgentToolCall(t *testing.T) {
 	}
 	proxy.gatewayDispatcher.budget = budget
 	proxy.gatewayDispatcher.resolveCredential = func(string) (string, error) { return "provider-test-key", nil }
-	proxy.gatewayDispatcher.setClientToken("local-client-token-12345678901234567890")
 
 	first := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:14326/v1/chat/completions", strings.NewReader(
 		`{"model":"cloud/deepseek/deepseek-chat","messages":[{"role":"user","content":"What is the weather in Seattle?"}],"tools":[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object"}}}],"tool_choice":"auto"}`,
 	))
-	first.Header.Set("Authorization", "Bearer local-client-token-12345678901234567890")
 	firstResponse := httptest.NewRecorder()
 	proxy.serveGateway(firstResponse, first)
 	if firstResponse.Code != http.StatusOK || !strings.Contains(firstResponse.Body.String(), `"tool_calls"`) {
@@ -1370,7 +1415,6 @@ func TestGatewaySupportsTwoTurnAgentToolCall(t *testing.T) {
 	second := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:14326/v1/chat/completions", strings.NewReader(
 		`{"model":"cloud/deepseek/deepseek-chat","messages":[{"role":"user","content":"What is the weather in Seattle?"},{"role":"assistant","tool_calls":[{"id":"call_weather","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Seattle\"}"}}]},{"role":"tool","tool_call_id":"call_weather","content":"Sunny, 18 C"}],"tools":[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object"}}}],"tool_choice":"auto","response_format":{"type":"json_object"}}`,
 	))
-	second.Header.Set("Authorization", "Bearer local-client-token-12345678901234567890")
 	secondResponse := httptest.NewRecorder()
 	proxy.serveGateway(secondResponse, second)
 	if secondResponse.Code != http.StatusOK || !strings.Contains(secondResponse.Body.String(), "Clear in Seattle") {
@@ -1395,7 +1439,6 @@ func TestGatewayPaidCloudFallbackRequiresOptInAndBudget(t *testing.T) {
 		t.Fatalf("load Provider config: %v", err)
 	}
 	proxy.gatewayDispatcher.client = newCloudHTTPClient(cloudHTTPOptions{allowLoopback: true})
-	proxy.gatewayDispatcher.setClientToken("local-client-token-12345678901234567890")
 	proxy.gatewayDispatcher.resolveCredential = func(string) (string, error) { return "provider-test-key", nil }
 	budget, err := newCloudBudgetLedger(filepath.Join(t.TempDir(), "budget.json"))
 	if err != nil {
@@ -1411,7 +1454,6 @@ func TestGatewayPaidCloudFallbackRequiresOptInAndBudget(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:14326/v1/chat/completions", strings.NewReader(
 			`{"model":"auto","messages":[{"role":"user","content":"hello"}]}`,
 		))
-		req.Header.Set("Authorization", "Bearer local-client-token-12345678901234567890")
 		response := httptest.NewRecorder()
 		proxy.serveGateway(response, req)
 		return response
@@ -1542,67 +1584,6 @@ func TestGatewayCloudRoutingIsDisabledByDefault(t *testing.T) {
 	}
 }
 
-func TestGatewayRejectsCloudRequestWithoutClientToken(t *testing.T) {
-	var upstreamHits atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		upstreamHits.Add(1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-	proxy := NewProxy(nil)
-	config := strings.Replace(validCloudConfig, "https://api.deepseek.com", server.URL, 1)
-	if err := proxy.gatewayDispatcher.registry.ReplaceJSON([]byte(config), cloudConfigOptions{allowLoopbackURL: true}); err != nil {
-		t.Fatalf("load provider config: %v", err)
-	}
-	proxy.gatewayDispatcher.client = newCloudHTTPClient(cloudHTTPOptions{allowLoopback: true})
-	proxy.gatewayDispatcher.settings.Store(&gatewayRoutingSettings{cloudEnabled: true, policy: gatewayPolicyCloudOnly})
-	proxy.gatewayDispatcher.setCredentialResolver(func(string) (string, error) { return "provider-test-key", nil })
-	proxy.gatewayDispatcher.setClientToken("local-client-token-12345678901234567890")
-	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:14326/v1/chat/completions", strings.NewReader(
-		`{"model":"cloud/deepseek/deepseek-chat","messages":[]}`,
-	))
-	response := httptest.NewRecorder()
-	proxy.serveGateway(response, request)
-	if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), "unauthorized") {
-		t.Fatalf("unauthorized cloud response=%d %s", response.Code, response.Body.String())
-	}
-	if got := upstreamHits.Load(); got != 0 {
-		t.Fatalf("unauthorized cloud route reached upstream %d times", got)
-	}
-}
-
-func TestGatewayRejectsWrongClientTokenBeforeUpstream(t *testing.T) {
-	var upstreamHits atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		upstreamHits.Add(1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	proxy := NewProxy(nil)
-	config := strings.Replace(validCloudConfig, "https://api.deepseek.com", server.URL, 1)
-	if err := proxy.gatewayDispatcher.registry.ReplaceJSON([]byte(config), cloudConfigOptions{allowLoopbackURL: true}); err != nil {
-		t.Fatalf("load provider config: %v", err)
-	}
-	proxy.gatewayDispatcher.client = newCloudHTTPClient(cloudHTTPOptions{allowLoopback: true})
-	proxy.gatewayDispatcher.settings.Store(&gatewayRoutingSettings{cloudEnabled: true, policy: gatewayPolicyCloudOnly})
-	proxy.gatewayDispatcher.setCredentialResolver(func(string) (string, error) { return "provider-test-key", nil })
-	proxy.gatewayDispatcher.setClientToken("local-client-token-12345678901234567890")
-
-	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:14326/v1/chat/completions", strings.NewReader(
-		`{"model":"cloud/deepseek/deepseek-chat","messages":[]}`,
-	))
-	request.Header.Set("Authorization", "Bearer wrong-client-token-12345678901234567890")
-	response := httptest.NewRecorder()
-	proxy.serveGateway(response, request)
-	if response.Code != http.StatusUnauthorized {
-		t.Fatalf("wrong-token cloud response status=%d body=%s", response.Code, response.Body.String())
-	}
-	if got := upstreamHits.Load(); got != 0 {
-		t.Fatalf("wrong-token cloud request reached upstream %d times", got)
-	}
-}
-
 func TestGatewayRejectsCloudRequestWithoutBudgetBeforeUpstream(t *testing.T) {
 	var upstreamHits atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -1618,11 +1599,9 @@ func TestGatewayRejectsCloudRequestWithoutBudgetBeforeUpstream(t *testing.T) {
 	proxy.gatewayDispatcher.client = newCloudHTTPClient(cloudHTTPOptions{allowLoopback: true})
 	proxy.gatewayDispatcher.settings.Store(&gatewayRoutingSettings{cloudEnabled: true, policy: gatewayPolicyCloudOnly})
 	proxy.gatewayDispatcher.resolveCredential = func(string) (string, error) { return "provider-test-key", nil }
-	proxy.gatewayDispatcher.setClientToken("local-client-token-12345678901234567890")
 	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:14326/v1/chat/completions", strings.NewReader(
 		`{"model":"cloud/deepseek/deepseek-chat","messages":[]}`,
 	))
-	request.Header.Set("Authorization", "Bearer local-client-token-12345678901234567890")
 	response := httptest.NewRecorder()
 	proxy.serveGateway(response, request)
 	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "cloud_not_allowed") {
@@ -1643,21 +1622,13 @@ func TestGatewayHealthDoesNotRevealCloudConfigurationOrRequireToken(t *testing.T
 	}
 }
 
-func TestGatewayModelDirectoryRequiresTokenWhenCloudIsEnabled(t *testing.T) {
+func TestGatewayModelDirectoryIsAvailableOnLoopbackWhenCloudIsEnabled(t *testing.T) {
 	proxy := NewProxy(nil)
 	proxy.gatewayDispatcher.settings.Store(&gatewayRoutingSettings{cloudEnabled: true, policy: gatewayPolicyLocalOnly})
 	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:14326/v1/models", nil)
 	response := httptest.NewRecorder()
 	proxy.serveGateway(response, request)
-	if response.Code != http.StatusUnauthorized {
-		t.Fatalf("unauthenticated model directory status=%d body=%s", response.Code, response.Body.String())
-	}
-	proxy.gatewayDispatcher.setClientToken("local-client-token-12345678901234567890")
-	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:14326/v1/models", nil)
-	request.Header.Set("Authorization", "Bearer local-client-token-12345678901234567890")
-	response = httptest.NewRecorder()
-	proxy.serveGateway(response, request)
 	if response.Code != http.StatusOK {
-		t.Fatalf("authorized model directory status=%d body=%s", response.Code, response.Body.String())
+		t.Fatalf("model directory status=%d body=%s", response.Code, response.Body.String())
 	}
 }

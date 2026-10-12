@@ -2363,24 +2363,7 @@ func (b *Broker) Serve(ctx context.Context) error {
 	// these gates so they remain available while either desktop-engine setup is
 	// still reconciling.
 	go b.runHostedEngineAdvertisements(ctx)
-	availabilityRunners := []func(context.Context){
-		func(ctx context.Context) { b.runAutoAdvertiseEngine(ctx, ollamaProxyProfile) },
-		b.runAutoAdvertiseLMStudio,
-		b.runNonHostedEngineAdvertisements,
-	}
-	for _, profile := range engineProxyProfiles {
-		if !b.proxyEnabled(profile) {
-			continue
-		}
-		if profile.Name == ollamaProxyProfile.Name || profile.Name == lmstudioProxyProfile.Name {
-			continue
-		}
-		profile := profile
-		availabilityRunners = append(availabilityRunners, func(ctx context.Context) {
-			b.runAutoAdvertiseEngine(ctx, profile)
-		})
-	}
-	go b.runEngineAvailabilityAfterPortGates(ctx, availabilityRunners...)
+	go b.runEngineAvailabilityAfterPortGates(ctx, b.runNonHostedEngineAdvertisements)
 
 	// nvpair-workload-manager is another auxiliary worker: it relays local
 	// workload lifecycle events to peer nodes and surfaces peer events

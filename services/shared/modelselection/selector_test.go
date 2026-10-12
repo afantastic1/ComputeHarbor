@@ -181,7 +181,7 @@ func TestAutoFastUsesFreshResourcesToChooseAmongModelDeployments(t *testing.T) {
 	}
 }
 
-func TestAutoFastUsesHighestKnownGPUOrVRAMPressure(t *testing.T) {
+func TestAutoFastIgnoresVRAMPressureWhenScoringDeployments(t *testing.T) {
 	busy := runtimeModel("same-model", "ollama", 8_000_000_000, true, 300, 30, nil)
 	busy.NodeID = "pc-a"
 	busy.GPUPressure = 0
@@ -193,8 +193,8 @@ func TestAutoFastUsesHighestKnownGPUOrVRAMPressure(t *testing.T) {
 	idle.VRAMPressure = 0
 
 	selection := (AutoModelSelector{}).Select(AutoFastAlias, Requirements{}, []RuntimeModel{busy, idle})
-	if selection == nil || selection.NodeID != "pc-b" {
-		t.Fatalf("selection = %+v, want same model's VRAM-idle pc-b deployment", selection)
+	if selection == nil || selection.NodeID != "pc-a" {
+		t.Fatalf("selection = %+v, want first tied deployment pc-a despite VRAM pressure", selection)
 	}
 }
 

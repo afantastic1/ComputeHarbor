@@ -195,18 +195,18 @@ func TestReserveCandidate_CombinesPendingPressureAndReservations(t *testing.T) {
 	}
 }
 
-func TestReserveCandidateUsesMaximumResourcePressure(t *testing.T) {
+func TestReserveCandidateIgnoresVRAMPressure(t *testing.T) {
 	p := prProxy(t)
 	applySnapshot(p, schedulerwire.Priority{
 		Nodes: []string{"a", "b"},
 		Ranks: []schedulerwire.NodeRank{
-			{ID: "a", GPUPressure: 2, VRAMPressure: 2},
-			{ID: "b", GPUPressure: 3, VRAMPressure: 0},
+			{ID: "a", GPUPressure: 0, VRAMPressure: 3},
+			{ID: "b", GPUPressure: 1, VRAMPressure: 0},
 		},
 	})
 
 	if got := reservedID(p, reservationCandidates("a", "b")); got != "a" {
-		t.Fatalf("resource-aware reservation chose %q, want a using max(GPU, VRAM)", got)
+		t.Fatalf("reservation chose %q, want a using GPU pressure only", got)
 	}
 }
 

@@ -23,7 +23,6 @@ import (
 
 	"nvpair-shared/appdir"
 	"nvpair-shared/modelselection"
-	"nvpair-shared/schedulerwire"
 )
 
 type gatewayPolicy string
@@ -75,7 +74,6 @@ type gatewayDispatcher struct {
 	registry            *cloudRegistry
 	client              *cloudHTTPClient
 	settings            atomic.Pointer[gatewayRoutingSettings]
-	auth                *gatewayAuthenticator
 	budget              *cloudBudgetLedger
 	budgetErr           error
 	budgetOnce          sync.Once
@@ -90,7 +88,6 @@ type gatewayDispatcher struct {
 func newGatewayDispatcher(proxy *Proxy) *gatewayDispatcher {
 	dispatcher := &gatewayDispatcher{
 		proxy: proxy, registry: newCloudRegistry(), client: newCloudHTTPClient(cloudHTTPOptions{}),
-		auth: newGatewayAuthenticator(),
 	}
 	dispatcher.settings.Store(&gatewayRoutingSettings{policy: gatewayPolicyLocalOnly})
 	return dispatcher
@@ -156,10 +153,6 @@ func (d *gatewayDispatcher) modelDirectory() []gatewayModel {
 }
 
 func (d *gatewayDispatcher) dispatch(w http.ResponseWriter, r *http.Request, body []byte, model string) {
-	if d.requiresCloudAuthorization(model) && !d.auth.authorized(r.Header.Get("Authorization")) {
-		writeGatewayError(w, http.StatusUnauthorized, "a valid Gateway bearer token is required", "unauthorized")
-		return
-	}
 	route, dispatchErr := d.resolve(model, body)
 	if dispatchErr != nil {
 		writeGatewayError(w, dispatchErr.status, dispatchErr.message, dispatchErr.kind)
@@ -284,33 +277,6 @@ func (d *gatewayDispatcher) monitorAuthorizedCloudPeer(
 	}
 }
 
-func (d *gatewayDispatcher) requiresCloudAuthorization(model string) bool {
-	settings := d.settings.Load()
-	if !settings.cloudEnabled {
-		return false
-	}
-	if strings.HasPrefix(model, "cloud/") {
-		return true
-	}
-	switch model {
-	case AUTO_CLOUD_ALIAS:
-		return settings.policy != gatewayPolicyLocalOnly
-	case AUTO_LOCAL_ALIAS:
-		return false
-	default:
-		return isGatewayAutoAlias(model) &&
-			(settings.policy == gatewayPolicyCloudOnly || settings.policy == gatewayPolicyPreferLocal && settings.allowPaidFallback)
-	}
-}
-
-func (d *gatewayDispatcher) authorizeModelDirectory(authorization string) bool {
-	return !d.settings.Load().cloudEnabled || d.auth.authorized(authorization)
-}
-
-func (d *gatewayDispatcher) setClientToken(token string) {
-	d.auth.setToken(token)
-}
-
 func (d *gatewayDispatcher) resolve(model string, body []byte) (gatewayRoute, *gatewayDispatchError) {
 	traits, err := parseGatewayRequestTraits(body)
 	if err != nil {
@@ -358,7 +324,7 @@ func (d *gatewayDispatcher) resolveAuto(
 		capacity := classifyLocalCapacity(traits.model, traits.capabilities, inventory)
 		slog.Debug("Gateway classified local model capacity", "reason", capacity.reason, "model", traits.model)
 		localRoute, localErr := d.resolveLocalAutoFromInventory(traits.model, traits, inventory)
-		if capacity.reason == localCapacitySaturated && settings.allowPaidFallback && settings.cloudEnabled {
+		if capacity.reason == localCapacityBusy && settings.allowPaidFallback && settings.cloudEnabled {
 			cloudRoute, cloudErr := d.resolveConfiguredCloud(settings, traits)
 			if cloudErr != nil {
 				slog.Debug("Gateway kept saturated local route because configured Cloud fallback is unavailable", "reason", cloudErr.kind)
@@ -412,7 +378,7 @@ type localCapacityReason string
 
 const (
 	localCapacityAvailable   localCapacityReason = "local_available"
-	localCapacitySaturated   localCapacityReason = "local_saturated"
+	localCapacityBusy        localCapacityReason = "all_local_deployments_busy"
 	localCapacityUnavailable localCapacityReason = "no_local_capacity"
 	localCapacityUnknown     localCapacityReason = "telemetry_unknown"
 )
@@ -441,18 +407,16 @@ func classifyLocalCapacity(
 	allBusy := true
 	unknown := false
 	for _, candidate := range compatible {
-		gpuSaturated := candidate.GPUPressureKnown && candidate.GPUPressure >= schedulerwire.MaxGPUPressure
-		vramSaturated := candidate.VRAMPressureKnown && candidate.VRAMPressure >= schedulerwire.MaxGPUPressure
-		if gpuSaturated || vramSaturated {
+		if candidate.InFlightReservations > 0 || (candidate.PendingKnown && candidate.PendingRequests > 0) {
 			continue
 		}
 		allBusy = false
-		if !candidate.GPUPressureKnown || !candidate.VRAMPressureKnown {
+		if !candidate.PendingKnown {
 			unknown = true
 		}
 	}
 	if allBusy {
-		return localCapacityClassification{reason: localCapacitySaturated}
+		return localCapacityClassification{reason: localCapacityBusy}
 	}
 	if unknown {
 		return localCapacityClassification{reason: localCapacityUnknown}

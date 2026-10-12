@@ -114,8 +114,8 @@ func (m *Manager) rankAt(now time.Time) ([]string, []NodeRank) {
 	m.mu.Unlock()
 
 	sort.Slice(ranks, func(i, j int) bool {
-		leftPressure := effectiveResourcePressure(ranks[i].GPUPressure, ranks[i].GPUPressureKnown, ranks[i].VRAMPressure, ranks[i].VRAMPressureKnown)
-		rightPressure := effectiveResourcePressure(ranks[j].GPUPressure, ranks[j].GPUPressureKnown, ranks[j].VRAMPressure, ranks[j].VRAMPressureKnown)
+		leftPressure := ranks[i].GPUPressure
+		rightPressure := ranks[j].GPUPressure
 		leftLoad := ranks[i].Pending + leftPressure
 		rightLoad := ranks[j].Pending + rightPressure
 		if leftLoad != rightLoad {

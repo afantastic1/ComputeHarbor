@@ -19,28 +19,29 @@ import (
 )
 
 const (
-	defaultCloudMaxConcurrent     = 8
-	defaultCloudMaxResponseBytes  = 8 << 20
-	defaultCloudMaxSSEEventBytes  = 1 << 20
-	cloudDialTimeout              = 10 * time.Second
-	cloudTLSHandshakeTimeout      = 10 * time.Second
-	cloudResponseHeaderTimeout    = 30 * time.Second
-	cloudIdleConnectionTimeout    = 90 * time.Second
-	defaultCloudStreamIdleTimeout = 2 * time.Minute
-	defaultCloudNonStreamTimeout  = 2 * time.Minute
+	defaultCloudMaxConcurrent         = 8
+	defaultCloudMaxResponseBytes      = 8 << 20
+	defaultCloudMaxSSEEventBytes      = 1 << 20
+	cloudDialTimeout                  = 10 * time.Second
+	cloudTLSHandshakeTimeout          = 10 * time.Second
+	defaultCloudResponseHeaderTimeout = 2 * time.Minute
+	cloudIdleConnectionTimeout        = 90 * time.Second
+	defaultCloudStreamIdleTimeout     = 2 * time.Minute
+	defaultCloudNonStreamTimeout      = 2 * time.Minute
 )
 
 type cloudIPLookup func(context.Context, string, string) ([]net.IPAddr, error)
 
 type cloudHTTPOptions struct {
-	maxConcurrent     int
-	maxResponseBytes  int64
-	maxSSEEventBytes  int
-	streamIdleTimeout time.Duration
-	nonStreamTimeout  time.Duration
-	allowLoopback     bool
-	lookupIP          cloudIPLookup
-	tlsConfig         *tls.Config
+	maxConcurrent         int
+	maxResponseBytes      int64
+	maxSSEEventBytes      int
+	streamIdleTimeout     time.Duration
+	nonStreamTimeout      time.Duration
+	responseHeaderTimeout time.Duration
+	allowLoopback         bool
+	lookupIP              cloudIPLookup
+	tlsConfig             *tls.Config
 }
 
 type cloudHTTPClient struct {
@@ -70,6 +71,9 @@ func newCloudHTTPClient(options cloudHTTPOptions) *cloudHTTPClient {
 	if options.nonStreamTimeout <= 0 {
 		options.nonStreamTimeout = defaultCloudNonStreamTimeout
 	}
+	if options.responseHeaderTimeout <= 0 {
+		options.responseHeaderTimeout = defaultCloudResponseHeaderTimeout
+	}
 	if options.lookupIP == nil {
 		options.lookupIP = func(ctx context.Context, _, host string) ([]net.IPAddr, error) {
 			return net.DefaultResolver.LookupIPAddr(ctx, host)
@@ -80,7 +84,7 @@ func newCloudHTTPClient(options cloudHTTPOptions) *cloudHTTPClient {
 		DialContext:           nil,
 		ForceAttemptHTTP2:     true,
 		TLSHandshakeTimeout:   cloudTLSHandshakeTimeout,
-		ResponseHeaderTimeout: cloudResponseHeaderTimeout,
+		ResponseHeaderTimeout: options.responseHeaderTimeout,
 		IdleConnTimeout:       cloudIdleConnectionTimeout,
 		MaxIdleConns:          options.maxConcurrent,
 		MaxIdleConnsPerHost:   options.maxConcurrent,

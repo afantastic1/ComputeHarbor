@@ -98,8 +98,6 @@ func (p *Proxy) gatewayInventory() []modelselection.RuntimeModel {
 					candidate.PendingKnown = resource.pendingKnown
 					candidate.GPUPressure = resource.gpuPressure
 					candidate.GPUPressureKnown = resource.gpuPressureKnown
-					candidate.VRAMPressure = resource.vramPressure
-					candidate.VRAMPressureKnown = resource.vramPressureKnown
 					candidate.InFlightReservations = resource.reservations
 				}
 				candidates[key] = candidate
@@ -138,12 +136,13 @@ func modelFamily(model string) string {
 }
 
 func modelCapabilities(engine string) map[string]bool {
-	// Discovery currently provides model IDs only. Do not infer optional
-	// capabilities from names. Local facades expose basic chat and SSE.
-	// 没有可靠能力信息，就不宣称模型支持Tool Calling
+	// Discovery currently provides model IDs only. Treat tool calling as an
+	// engine protocol capability only for engines verified to support it; do not
+	// infer vision or structured output from model names.
 	capabilities := map[string]bool{"chat": true, "streaming": true}
-	if engine == "strata" {
-		// Verified against the configured local Strata model's OpenAI endpoint.
+	if engine == "lmstudio" || engine == "strata" {
+		// LM Studio is verified through its direct OpenAI-compatible endpoint;
+		// Strata was verified against the configured local model endpoint.
 		capabilities["tools"] = true
 	}
 	return capabilities
@@ -239,10 +238,6 @@ func (p *Proxy) serveGateway(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/v1/models" {
-		if !p.gatewayDispatcher.authorizeModelDirectory(r.Header.Get("Authorization")) {
-			writeGatewayError(w, http.StatusUnauthorized, "a valid Gateway bearer token is required", "unauthorized")
-			return
-		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": p.gatewayModels()})

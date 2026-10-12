@@ -36,11 +36,11 @@ observations take precedence. The broker ages and relays this feed to
 `nvpair-job-scheduler`.
 
 The scheduler smooths fresh GPU and VRAM utilization independently into pressure
-0–3, uses neutral pressure 1 when both signals are unknown, and ranks by
-`pending + max(known gpuPressure, known vramPressure)`, then effective pressure,
-then stable UUID. It emits `schedule:priority` snapshots containing order,
-pending counts, both pressures, and their freshness. Each facade chooses with
-`pending + max(gpuPressure, vramPressure) + localReservations`, so
+0–3, uses neutral GPU pressure 1 when GPU telemetry is unknown, and ranks by
+`pending + gpuPressure`, then GPU pressure, then stable UUID. VRAM pressure is
+reported for telemetry but does not affect ordering. It emits `schedule:priority`
+snapshots containing order, pending counts, both pressures, and their freshness.
+Each facade chooses with `pending + gpuPressure + localReservations`, so
 concurrent bursts do not wait for workload feedback.
 
 Those reservations are **process-wide, shared by every facade**. Two facades
