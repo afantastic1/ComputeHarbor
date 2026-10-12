@@ -268,6 +268,7 @@ func sampleInfo() NodeInfoResponse {
 			Name:               "RTX 6000",
 			VramBytes:          48 << 30,
 			VramUsedBytes:      12 << 30,
+			VramUsedValid:      true,
 			UtilizationPercent: 42,
 		}},
 		CPU:            &CPUInfo{Name: "Threadripper", Cores: 64, UtilizationPercent: 7},
@@ -312,7 +313,7 @@ func TestNodeAddRespondsWithInitialStatusThenDiscoversProbeResult(t *testing.T) 
 	if len(status.OllamaModels) != 2 || status.OllamaModels[0] != "llama3" || status.OllamaModels[1] != "mistral" {
 		t.Fatalf("models = %#v", status.OllamaModels)
 	}
-	if len(status.GPUs) != 1 || status.GPUs[0].Name != "RTX 6000" {
+	if len(status.GPUs) != 1 || status.GPUs[0].Name != "RTX 6000" || !status.GPUs[0].VramUsedValid {
 		t.Fatalf("gpus = %#v", status.GPUs)
 	}
 	if status.CPU == nil || status.CPU.Cores != 64 {
@@ -323,6 +324,15 @@ func TestNodeAddRespondsWithInitialStatusThenDiscoversProbeResult(t *testing.T) 
 	}
 	if !status.TelemetryValid || status.MSSince != 137 {
 		t.Fatalf("telemetry = valid:%v age:%d, want true/137", status.TelemetryValid, status.MSSince)
+	}
+}
+
+func TestGPUsEqualDetectsVRAMValidityChange(t *testing.T) {
+	left := []GPUInfo{{Name: "GPU", VramBytes: 8 << 30, VramUsedBytes: 4 << 30}}
+	right := append([]GPUInfo(nil), left...)
+	right[0].VramUsedValid = true
+	if gpusEqual(left, right) {
+		t.Fatal("GPU equality ignored VRAM sample validity")
 	}
 }
 

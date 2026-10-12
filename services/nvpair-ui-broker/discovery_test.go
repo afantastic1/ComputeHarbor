@@ -310,10 +310,12 @@ func TestHandleNotifyNodeLostUsesHostUUID(t *testing.T) {
 
 func TestScannerProcessRoutesAndRemovesTelemetry(t *testing.T) {
 	want := noderec.NodeTelemetry{
-		HostUUID:          "peer-uuid",
-		GPUUtilizationPct: 84,
-		TelemetryValid:    true,
-		MSSince:           137,
+		HostUUID:             "peer-uuid",
+		GPUUtilizationPct:    84,
+		VRAMUtilizationPct:   92,
+		VRAMUtilizationKnown: true,
+		TelemetryValid:       true,
+		MSSince:              137,
 	}
 	params, err := json.Marshal(want)
 	if err != nil {
@@ -332,6 +334,9 @@ func TestScannerProcessRoutesAndRemovesTelemetry(t *testing.T) {
 	}
 	if got.GPUUtilizationPct != 84 {
 		t.Fatalf("routed utilization = %d, want 84", got.GPUUtilizationPct)
+	}
+	if got.VRAMUtilizationPct != 92 || !got.VRAMUtilizationKnown {
+		t.Fatalf("routed VRAM telemetry = %+v, want 92%% known", got)
 	}
 
 	sp.handleNotify(noderec.NotifyNodeRemoved, nodeRemovedFrame(t, "peer", "peer-uuid"))

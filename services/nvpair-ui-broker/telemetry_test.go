@@ -17,10 +17,12 @@ func TestTelemetryCacheAgesObservations(t *testing.T) {
 	cache := newTelemetryCache()
 	receivedAt := time.Unix(1_700_000_000, 0)
 	input := noderec.NodeTelemetry{
-		HostUUID:          "node-a",
-		GPUUtilizationPct: 84,
-		TelemetryValid:    true,
-		MSSince:           137,
+		HostUUID:             "node-a",
+		GPUUtilizationPct:    84,
+		VRAMUtilizationPct:   91,
+		VRAMUtilizationKnown: true,
+		TelemetryValid:       true,
+		MSSince:              137,
 	}
 	projected, ok := cache.Upsert(sourceScanner, input, receivedAt)
 	if !ok || projected.MSSince != 137 {
@@ -35,6 +37,9 @@ func TestTelemetryCacheAgesObservations(t *testing.T) {
 	}
 	if snapshot[0].GPUUtilizationPct != 84 {
 		t.Fatalf("cached utilization = %d, want 84", snapshot[0].GPUUtilizationPct)
+	}
+	if snapshot[0].VRAMUtilizationPct != 91 || !snapshot[0].VRAMUtilizationKnown {
+		t.Fatalf("cached VRAM telemetry = %+v, want 91%% known", snapshot[0])
 	}
 }
 
@@ -162,5 +167,19 @@ func TestManualTelemetryReprojectsSurvivingAliasAtOriginalAge(t *testing.T) {
 	b.removeManualNode("first")
 	if snapshot := b.telemetry.Snapshot(time.Now()); len(snapshot) != 0 {
 		t.Fatalf("final manual alias left telemetry cached: %+v", snapshot)
+	}
+}
+
+func TestManualNodeTelemetryIncludesHighestKnownVRAMUtilization(t *testing.T) {
+	got := manualNodeTelemetry(manualNodeStatus{
+		GPUs: []GPUInfo{
+			{Name: "unknown", VramBytes: 8 << 30, VramUsedBytes: 8 << 30},
+			{Name: "known", VramBytes: 8 << 30, VramUsedBytes: 7 << 30, VramUsedValid: true},
+		},
+		TelemetryValid: true,
+	}, "node-a")
+
+	if got.VRAMUtilizationPct != 87 || !got.VRAMUtilizationKnown {
+		t.Fatalf("manual VRAM telemetry = %+v, want 87%% known", got)
 	}
 }

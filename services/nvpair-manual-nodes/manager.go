@@ -47,6 +47,7 @@ type GPUInfo struct {
 	Name               string `json:"name"`
 	VramBytes          uint64 `json:"vram_bytes,omitempty"`
 	VramUsedBytes      uint64 `json:"vram_used_bytes,omitempty"`
+	VramUsedValid      bool   `json:"vram_used_valid,omitempty"`
 	UtilizationPercent uint32 `json:"utilization_percent,omitempty"`
 }
 
@@ -721,6 +722,7 @@ func gpusEqual(a, b []GPUInfo) bool {
 		if a[i].Name != b[i].Name ||
 			a[i].VramBytes != b[i].VramBytes ||
 			a[i].VramUsedBytes != b[i].VramUsedBytes ||
+			a[i].VramUsedValid != b[i].VramUsedValid ||
 			a[i].UtilizationPercent != b[i].UtilizationPercent {
 			return false
 		}

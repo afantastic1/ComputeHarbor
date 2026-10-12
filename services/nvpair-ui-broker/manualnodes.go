@@ -54,11 +54,14 @@ func manualNodeTelemetry(status manualNodeStatus, hostUUID string) noderec.NodeT
 			utilization = status.GPUs[i].UtilizationPercent
 		}
 	}
+	vramUtilization, vramKnown := noderec.MaxVRAMUtilization(status.GPUs)
 	return noderec.NodeTelemetry{
-		HostUUID:          hostUUID,
-		GPUUtilizationPct: utilization,
-		TelemetryValid:    status.TelemetryValid,
-		MSSince:           status.MSSince,
+		HostUUID:             hostUUID,
+		GPUUtilizationPct:    utilization,
+		VRAMUtilizationPct:   vramUtilization,
+		VRAMUtilizationKnown: vramKnown,
+		TelemetryValid:       status.TelemetryValid,
+		MSSince:              status.MSSince,
 	}
 }
 
