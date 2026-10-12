@@ -27,7 +27,7 @@ namespace:
 | `nvpair-engine-manager` | Local engine and model control plane; also serves `GET /v1/models` to peers | `engine:*` |
 | `nvpair-cluster-manager` | Node identity, trusted-node store, PIN pairing | `cluster:*`, `nodes:*` |
 | `nvpair-workload-manager` | Cluster workload relay between this node and peers | `workloads:*` |
-| `nvpair-job-scheduler` | Ranks nodes by pending work and GPU pressure for the proxies | _internal_ |
+| `nvpair-job-scheduler` | Ranks nodes by pending work and GPU/VRAM pressure for the proxies | _internal_ |
 | `nvpair-errors` | Service-error datastore and cross-node sync | `errors:*` |
 | `nvpair-node-settings` | Typed per-node settings store | `settings/*` |
 | `nvpair-manual-nodes` | User-added nodes, merged into the discovery snapshot | `node/*`, `nodes/list` |
@@ -53,8 +53,9 @@ Two responsibilities live in the broker itself rather than in a worker:
   `workloads:remove` for subscribed clients.
 - **Scheduling telemetry.** Scanner and manual-node observations populate a
   source-aware cache keyed by `hostUuid`; scanner data takes precedence. The
-  broker advances sample age locally, feeds compact maximum-GPU telemetry to the
-  scheduler, and replays it after a scheduler restart.
+  broker advances sample age locally, feeds compact maximum-GPU and maximum
+  valid VRAM-utilization telemetry to the scheduler, and replays it after a
+  scheduler restart.
 
 ### Supervision & recovery
 
@@ -92,7 +93,7 @@ Logs go to **stderr** (shared `applog` format, same as every other NVPAIR binary
 
 On startup — **before** emitting `app:ready` — the broker spawns the scanner and (when available) node-info, `nvpair-proxy`, the workload-manager, and the cluster-manager as child processes over stdio. The proxy is spawned up front but doesn't gate `app:ready` — each of its facades announces its listen port asynchronously (see below). None of the auxiliary workers gate `app:ready`.
 
-**`nvpair-node-scanner`** (the consolidated discovery daemon) is spawned first. It pushes `discovery:node-discovered`, `discovery:node-updated`, and `discovery:node-removed` notifications into the broker, which maintains them in an in-memory map keyed by `id`. Clients query that map via `discovery:get-nodes` and — once they've opted in via `discovery:subscribe` — receive a `discovery:nodes-changed` notification on every store mutation. The raw `discovery:node-*` notifications are never forwarded as-is. The scanner polls healthy node-info endpoints on a staggered two-second cadence, backs consecutive remote failures off to a 30-second cap, and emits compact `discovery:node-telemetry` observations containing maximum GPU utilization, validity, and age; these remain internal to broker scheduling. The broker registers this node's local service ports (`ni`/`er`/`wl`/`cl`/`em`, plus `ol`/`lm`/`lc` from the engine poller) with the daemon over the same link, so the daemon can advertise them all in one `_nvpair-node` record.
+**`nvpair-node-scanner`** (the consolidated discovery daemon) is spawned first. It pushes `discovery:node-discovered`, `discovery:node-updated`, and `discovery:node-removed` notifications into the broker, which maintains them in an in-memory map keyed by `id`. Clients query that map via `discovery:get-nodes` and — once they've opted in via `discovery:subscribe` — receive a `discovery:nodes-changed` notification on every store mutation. The raw `discovery:node-*` notifications are never forwarded as-is. The scanner polls healthy node-info endpoints on a staggered two-second cadence, backs consecutive remote failures off to a 30-second cap, and emits compact `discovery:node-telemetry` observations containing maximum GPU and VRAM utilization, validity, and age; these remain internal to broker scheduling. The broker registers this node's local service ports (`ni`/`er`/`wl`/`cl`/`em`, plus `ol`/`lm`/`lc` from the engine poller) with the daemon over the same link, so the daemon can advertise them all in one `_nvpair-node` record.
 
 **`nvpair-node-info`** is spawned next. It's a server, not an event source: it stands up the local `/v1/node-info` HTTP endpoint (GPU/CPU/memory inventory). It does not advertise itself — the broker registers its `ni` port with the scanner daemon, which carries it in the node record, and a peer's daemon fetches `/v1/node-info` over plain HTTP to enrich the node. The broker doesn't read anything back from node-info's stdout (drained and discarded). Spawning it is **optional**: if the binary can't be resolved (and no `--node-info-path` override was given) the broker logs a warning and continues serving discovery without it.
 
@@ -130,7 +131,7 @@ selection excludes the default engine port and other engines' reserved ports.
 Explicit engine and proxy settings are preserved; a bind failure on an explicitly
 chosen proxy port is reported instead of selecting a fallback.
 
-For automatic model-bearing inference, every facade combines scheduler pending counts and GPU pressure with the process-wide reservation map under one lock before forwarding, so concurrent requests distribute without an artificial delay or a round trip through the scheduler. A reservation is released when its request ends and moves with a failover, so a node stops counting as loaded as soon as it stops working. Manual pins, model-owner tiers, and the complete failover list keep their existing precedence. The broker otherwise treats the proxy as **optional and non-fatal**.
+For automatic model-bearing inference, every facade combines scheduler pending counts and the higher of GPU and VRAM pressure with the process-wide reservation map under one lock before forwarding, so concurrent requests distribute without an artificial delay or a round trip through the scheduler. A reservation is released when its request ends and moves with a failover, so a node stops counting as loaded as soon as it stops working. Manual pins, model-owner tiers, and the complete failover list keep their existing precedence. The broker otherwise treats the proxy as **optional and non-fatal**.
 
 Each facade announces its bound port **asynchronously**, via an engine-addressed `ready` notification emitted once its HTTP listener is up. The broker records readiness per engine and exposes it through that engine's `<engine>-proxy:get-status` request — per engine, because the facades bind different ports and a single port for the process would be whichever readied last. Because `ready` arrives after `app:ready` (and the proxy is optional), clients learn a port by **polling** `<engine>-proxy:get-status` rather than assuming it from `app:ready`.
 
@@ -157,14 +158,16 @@ Two classes of proxy notification are **not** re-emitted under any
 - **Local echo.** Local-origin proxy workloads are also emitted to the same `workloads:*` client stream (lifecycle translated to `workloads:upsert`), so a subscribed client sees a coherent cluster-wide view — its own workloads alongside peers'.
 
 **`nvpair-job-scheduler`** consumes the accepted workload stream, compact GPU
-telemetry, and discovery snapshot. It smooths fresh utilization into pressure
-0–3, uses neutral pressure 1 for invalid/missing/older-than-10-second samples,
-and orders by `pending + gpuPressure`, then pressure, then stable UUID. Load is
+and VRAM telemetry, and discovery snapshot. It smooths each fresh utilization
+signal independently into pressure 0–3, uses neutral pressure 1 only when both
+signals are unknown, and orders by `pending + maxKnownPressure`, then effective
+pressure, then stable UUID. Load is
 node-wide across Ollama, LM Studio, and llama.cpp because they normally contend
 for the same resources. Each engine-specific `schedule:priority` carries
 `{engine,nodes,ranks}` and refreshes when order, pending counts, pressure, or
-pressure freshness changes. `gpuPressureKnown` distinguishes fresh pressure 1
-from the neutral 1 used when telemetry is missing or stale. The broker caches,
+pressure freshness changes. `gpuPressureKnown` and `vramPressureKnown`
+distinguish fresh pressure bands from missing, invalid, or older-than-10-second
+telemetry. The broker caches,
 generation-orders, and replays the full
 `{nodes,ranks}` snapshot to the matching facade, where a newly delivered
 snapshot resets optimistic reservation deltas. On scheduler spawn/restart the

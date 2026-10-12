@@ -30,15 +30,17 @@ failover, including an upstream model `404` caused by stale positive inventory,
 continues only through other advertised owners and never broadens to excluded
 nodes.
 
-The scanner and manual-node worker feed compact maximum-GPU telemetry into the
-broker's source-aware cache; scanner observations take precedence. The broker
-ages and relays this feed to `nvpair-job-scheduler`.
+The scanner and manual-node worker feed compact maximum-GPU and maximum valid
+VRAM-utilization telemetry into the broker's source-aware cache; scanner
+observations take precedence. The broker ages and relays this feed to
+`nvpair-job-scheduler`.
 
-The scheduler smooths fresh utilization into pressure 0–3, treats invalid,
-missing, or older-than-10-second telemetry as neutral pressure 1, and ranks by
-`pending + gpuPressure`, then pressure, then stable UUID. It emits
-`schedule:priority` snapshots containing order, pending counts, and pressure.
-Each facade chooses with `pending + gpuPressure + localReservations`, so
+The scheduler smooths fresh GPU and VRAM utilization independently into pressure
+0–3, uses neutral pressure 1 when both signals are unknown, and ranks by
+`pending + max(known gpuPressure, known vramPressure)`, then effective pressure,
+then stable UUID. It emits `schedule:priority` snapshots containing order,
+pending counts, both pressures, and their freshness. Each facade chooses with
+`pending + max(gpuPressure, vramPressure) + localReservations`, so
 concurrent bursts do not wait for workload feedback.
 
 Those reservations are **process-wide, shared by every facade**. Two facades
@@ -63,7 +65,8 @@ arriving after one is ignored rather than double-counted.
 - Do not implement a TypeScript scheduler or load balancer.
 - Do not derive routing decisions from renderer telemetry.
 - Do not emit a separate proxy-node-switch log.
-- Do not treat GPU pressure as GPU capability, VRAM capacity, or device affinity.
+- Do not treat GPU or VRAM pressure as GPU capability, absolute VRAM capacity,
+  or device affinity.
 - Do not mirror scheduler smoothing or proxy load/reservation accounting in
   TypeScript.
 

@@ -237,12 +237,12 @@ owner set returns a local `502`. Routing precedence within the eligible set is:
 3. the proxy's deterministic default ordering.
 
 The scheduler combines total pending (queued and running) workload across all
-engines with a smoothed 0–3 pressure derived from the busiest GPU. Missing,
-invalid, or older-than-10-second telemetry has neutral pressure. It emits the
-order, pending count, and pressure, reranking on meaningful workload, discovery,
-or pressure changes with a periodic reconciliation fallback. Each proxy chooses
-with `pending + gpuPressure + localReservations`; a separate freshness flag
-keeps stale telemetry neutral, so concurrent bursts spread
+engines with independent smoothed 0–3 pressure from maximum GPU compute and VRAM
+utilization. Missing, invalid, or older-than-10-second signals are unknown; both
+unknown produces neutral pressure 1. It emits the order, pending count, both
+pressures, and their freshness, reranking on meaningful workload, discovery, or
+pressure changes with a periodic reconciliation fallback. Each proxy chooses
+with `pending + max(gpuPressure, vramPressure) + localReservations`, so concurrent bursts spread
 across eligible owners before workload feedback arrives. An upstream `404`
 remains retryable among advertised owners because an inventory snapshot can
 become stale. Electron's richer renderer metrics are display-only; Electron does

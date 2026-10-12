@@ -12,8 +12,9 @@ routing proxies. It is the **priority** input to proxy auto-routing: the proxies
 own the actual per-request decision, and this component only tells them what
 order to prefer.
 
-The ranking combines node-wide pending workload with a coarse, smoothed GPU
-pressure signal. It is not VRAM-capacity- or latency-aware.
+The ranking combines node-wide pending workload with independent coarse,
+smoothed GPU-compute and VRAM-utilization pressure signals. It is not
+engine-to-device-affinity- or latency-aware.
 
 ## Communication
 
@@ -42,7 +43,7 @@ The broker forwards these notifications:
 | `discovery:nodes-changed` | Replaces the eligible node set |
 | `workloads:upsert` | Adds or updates a workload in the catalog |
 | `workloads:remove` | Drops a workload from the catalog |
-| `scheduler:telemetry` | Updates one node's maximum GPU utilization and sample age |
+| `scheduler:telemetry` | Updates one node's maximum GPU and VRAM utilization plus sample age |
 
 A workload counts as pending when its state is `queued` or `running`. Pending
 work is attributed to the node in its `scheduledOn` field; work that has not been
@@ -50,23 +51,23 @@ placed yet counts toward no node.
 
 ## Ranking
 
-Fresh maximum-GPU utilization is smoothed with an EWMA (`alpha = 0.35`) and
-mapped to pressure units: 0 below 40%, 1 from 40–69%, 2 from 70–84%, and 3 at
-85% or above. Downward transitions use 35%, 65%, and 80% thresholds to avoid
-rank thrash. Invalid, missing, or older-than-10-second telemetry contributes a
-neutral pressure of 1.
+Fresh maximum-GPU and maximum valid per-GPU VRAM utilization are smoothed
+independently with an EWMA (`alpha = 0.35`) and mapped to pressure units: 0
+below 40%, 1 from 40–69%, 2 from 70–84%, and 3 at 85% or above. Downward
+transitions use 35%, 65%, and 80% thresholds to avoid rank thrash. A signal is
+unknown when it is invalid, missing, or older than ten seconds.
 
-Nodes are sorted by `pending + gpuPressure`, then lower GPU pressure, then
-stable node ID. Pending counts include **all** engines together, so work through
+Nodes are sorted by `pending + max(known gpuPressure, known vramPressure)`, then
+lower effective pressure, then stable node ID. When both signals are unknown,
+effective pressure is the neutral value 1. Pending counts include **all** engines together, so work through
 one facade affects every other facade's ordering.
 
 Rankings are recomputed when the node set, catalog, or effective pressure
 changes, and reconciled on the interval timer. A ranking is only emitted when
 the order, pending counts, pressure, or pressure freshness actually changed.
-`gpuPressureKnown` distinguishes a fresh pressure band of `1` from the neutral
-`1` used when telemetry is missing, invalid, or stale. The known flag changes
-when telemetry crosses its freshness limit, even when the numeric band stays
-the same.
+`gpuPressureKnown` and `vramPressureKnown` distinguish fresh pressure bands
+from unknown signals. Either known flag changes when telemetry crosses its
+freshness limit, even when the effective numeric band stays the same.
 
 ## Output
 
@@ -81,8 +82,8 @@ One `schedule:priority` notification per engine (`ollama`, `lmstudio`,
     "engine": "ollama",
     "nodes": ["node-a-uuid", "node-b-uuid"],
     "ranks": [
-      { "id": "node-a-uuid", "pending": 0, "gpuPressure": 0, "gpuPressureKnown": true, "rank": 0 },
-      { "id": "node-b-uuid", "pending": 3, "gpuPressure": 2, "gpuPressureKnown": true, "rank": 1 }
+      { "id": "node-a-uuid", "pending": 0, "gpuPressure": 0, "gpuPressureKnown": true, "vramPressure": 2, "vramPressureKnown": true, "rank": 0 },
+      { "id": "node-b-uuid", "pending": 3, "gpuPressure": 2, "gpuPressureKnown": true, "vramPressure": 1, "vramPressureKnown": false, "rank": 1 }
     ]
   }
 }

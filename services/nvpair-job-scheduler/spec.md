@@ -11,9 +11,10 @@ SPDX-License-Identifier: Apache-2.0
 
 ## 1. Purpose
 Decides **where inference should go**. On every accepted workload, discovery, or
-effective GPU-pressure change, with a periodic timer as reconciliation, the Job
-Scheduler ranks the cluster's nodes by total pending work plus GPU pressure. It
-emits that node-wide order, pending count, and pressure so the Broker can push the
+effective GPU or VRAM pressure change, with a periodic timer as reconciliation,
+the Job Scheduler ranks the cluster's nodes by total pending work plus the
+highest known resource pressure. It emits that node-wide order, pending count,
+and both pressure signals so the Broker can push the
 snapshot to the matching local `nvpair-proxy` instance. Before
 forwarding, a proxy atomically adds its own not-yet-observed reservations and
 chooses the least-busy capable node; its existing failover walks the remaining
@@ -21,14 +22,15 @@ candidates.
 
 It is a **policy component**, not a data plane: it never sees inference traffic,
 never talks to the proxies directly, and owns no durable state. The initial policy
-uses a deliberately coarse, smoothed GPU signal; richer policies such as VRAM
-capacity, model locality, latency, and affinity can grow later behind the same
+uses deliberately coarse, smoothed GPU compute and VRAM utilization signals;
+richer policies such as model locality, latency, and affinity can grow later behind the same
 "emit an ordered list" contract.
 
 ## 2. Scope
 **In scope**
 - Compute one ordered priority list from the discovered-node set (ranking universe),
-  cluster workload picture, and fresh maximum-GPU utilization.
+  cluster workload picture, fresh maximum-GPU utilization, and fresh maximum
+  valid per-GPU VRAM utilization.
 - Recompute immediately after a meaningful workload, discovery, or pressure
   update, and periodically as a reconciliation and telemetry-aging fallback.
 - **Emit** the order and ranks to the Broker (`schedule:priority`) for each
@@ -64,9 +66,9 @@ capacity, model locality, latency, and affinity can grow later behind the same
   newly discovered node starts at count 0 and sorts to the top.
 - **No workload data yet**: all nodes rank equal → the stable tie-break (§7.2) gives
   a deterministic list, not thrash.
-- **GPU pressure changes**: smooth fresh utilization into coarse pressure bands;
-  invalid, missing, or stale telemetry receives a neutral penalty rather than
-  looking idle.
+- **GPU or VRAM pressure changes**: smooth each fresh utilization signal into
+  coarse pressure bands; when both signals are invalid, missing, or stale the
+  node receives a neutral penalty rather than looking idle.
 - **Proxy down / manual pin**: both handled downstream — the Broker drops/replays
   the push for an absent proxy (§7.4); a user `node/select` pin outranks the list
   until cleared (§7.3). Either way the scheduler keeps emitting.
@@ -88,22 +90,24 @@ capacity, model locality, latency, and affinity can grow later behind the same
   they rank at the top. Each proxy applies the subset it can route to and ignores
   the rest (§7.1); a proxy-only manual node absent from discovery is handled as an
   unlisted fallback (§7.1).
-- **GPU pressure (decided — EWMA, bands, freshness).** The broker feeds the maximum
-  utilization across a node's GPUs. The scheduler uses a 0.35 EWMA, pressure bands
+- **GPU and VRAM pressure (decided — EWMA, bands, freshness).** The broker feeds
+  maximum compute utilization and maximum valid used/total VRAM utilization
+  across a node's GPUs. The scheduler smooths each signal independently with a 0.35 EWMA, pressure bands
   0/1/2/3 at 40%/70%/85%, downward hysteresis at 35%/65%/80%, and a 10-second
-  freshness limit. Invalid, missing, and stale telemetry contributes neutral
-  pressure 1. `gpuPressureKnown` distinguishes fresh pressure 1 from neutral 1.
-  A fresh stream after a gap starts a new EWMA.
+  freshness limit. `gpuPressureKnown` and `vramPressureKnown` distinguish fresh
+  bands from unknown signals. When both are unknown, effective pressure is the
+  neutral value 1. A fresh stream after a gap starts a new EWMA.
 - **Cold-start / tie-break (decided — pressure then stable identity).** Rank by
-  `pending + gpuPressure`, then lower pressure, then `hostUuid`. A fixed final key
+  `pending + max(known gpuPressure, known vramPressure)`, then lower effective
+  pressure, then `hostUuid`. A fixed final key
   makes equal-load nodes deterministic; nodes with no telemetry all receive the
   same neutral pressure and collapse to UUID order.
 - **Manual pin precedence (decided — manual pin wins).** A user `node/select` pin
   overrides the list; the list governs only auto routing (§7.3).
-- **`node/set-priority` proxy semantics (decided — GPU-aware reservations).**
+- **`node/set-priority` proxy semantics (decided — resource-aware reservations).**
   Every engine facade stores the ordered nodes and optional ranks. For auto-routed
   model-bearing inference they atomically minimize
-  `rank.pending + rank.gpuPressure + localReservations` within the best
+  `rank.pending + max(rank.gpuPressure, rank.vramPressure) + localReservations` within the best
   model-eligibility tier,
   using scheduler order as the tie-break. They retain known unlisted nodes as
   fallbacks and treat an empty list as default auto order. A nodes-only payload
@@ -144,10 +148,10 @@ capacity, model locality, latency, and affinity can grow later behind the same
   `scheduler:tick`, `log/set-level`, and `shutdown` over `stdin`/`--ipc` and return
   JSON-RPC results (§7.0).
 - Keep three live in-memory views from Broker streams: the workload catalog
-  (`workloads:*`), GPU telemetry (`scheduler:telemetry`), and the node universe
+  (`workloads:*`), GPU/VRAM telemetry (`scheduler:telemetry`), and the node universe
   (`discovery:nodes-changed`).
 - After each meaningful input change, and on a fixed reconciliation interval
-  (default 1 s, runtime-adjustable), compute one node-wide GPU-aware order (§7.2)
+  (default 1 s, runtime-adjustable), compute one node-wide resource-aware order (§7.2)
   and publish it through every engine output. **Emit `schedule:priority` only when
   its order, pending counts, or pressure changed** (a forced `scheduler:tick`
   re-emits regardless).
@@ -166,14 +170,15 @@ capacity, model locality, latency, and affinity can grow later behind the same
 
 **Inputs** (Broker → scheduler over `stdin`/`--ipc`): JSON-RPC requests (§7.0) and
 three fanned notification streams — `workloads:*` (workload picture),
-`scheduler:telemetry` (GPU utilization), and `discovery:nodes-changed` (node
+`scheduler:telemetry` (GPU and VRAM utilization), and `discovery:nodes-changed` (node
 universe), self-accumulated into in-memory views.
 
 It reads only `id`, `engine`, `runId`, `state`, `originatedFrom`, `scheduledOn`
 from the `Workload` object ([WM spec §6](../nvpair-workload-manager/spec.md)), and
 only `hostUuid` from each discovered node
 ([broker `discovery:get-nodes`](../nvpair-ui-broker/README.md)). Telemetry carries
-`hostUuid`, maximum `gpuUtilizationPercent`, `telemetryValid`, and `msSince`.
+`hostUuid`, maximum `gpuUtilizationPercent`, maximum valid
+`vramUtilizationPercent`, `vramUtilizationKnown`, `telemetryValid`, and `msSince`.
 
 `NodeRank` (internal, surfaced in `scheduler:get-status`):
 ```json
@@ -182,6 +187,8 @@ only `hostUuid` from each discovered node
   pending: number     // queued+running workloads scheduledOn this node, all engines
   gpuPressure: number // coarse 0–3 pressure; unknown/stale is neutral 1
   gpuPressureKnown: boolean // false when pressure is unknown or stale
+  vramPressure: number // independently smoothed coarse 0–3 VRAM pressure
+  vramPressureKnown: boolean // false when VRAM usage is unknown or stale
   rank: number        // 0-based position (0 = highest priority)
 }
 ```
@@ -191,7 +198,7 @@ notification per engine when its rank snapshot changes; `errors:report` /
 `errors:clear`. No inference traffic and no requests addressed to other workers.
 
 ```json
-{"jsonrpc":"2.0","method":"schedule:priority","params":{"engine":"ollama","nodes":["MY-PC","LAB-DESK-B","GPU-RIG"],"ranks":[{"id":"MY-PC","pending":0,"gpuPressure":0,"gpuPressureKnown":true,"rank":0},{"id":"LAB-DESK-B","pending":1,"gpuPressure":1,"gpuPressureKnown":true,"rank":1},{"id":"GPU-RIG","pending":3,"gpuPressure":3,"gpuPressureKnown":true,"rank":2}]}}
+{"jsonrpc":"2.0","method":"schedule:priority","params":{"engine":"ollama","nodes":["MY-PC","LAB-DESK-B","GPU-RIG"],"ranks":[{"id":"MY-PC","pending":0,"gpuPressure":0,"gpuPressureKnown":true,"vramPressure":0,"vramPressureKnown":true,"rank":0},{"id":"LAB-DESK-B","pending":1,"gpuPressure":1,"gpuPressureKnown":true,"vramPressure":2,"vramPressureKnown":true,"rank":1},{"id":"GPU-RIG","pending":3,"gpuPressure":3,"gpuPressureKnown":true,"vramPressure":1,"vramPressureKnown":false,"rank":2}]}}
 ```
 
 ## 7. API / Interface Contract
@@ -227,10 +234,10 @@ Notifications:
 
 | Method | Direction | Params | Meaning |
 |--------|-----------|--------|---------|
-| `schedule:priority` | scheduler → Broker | `{ engine, nodes: [string], ranks?: [NodeRank] }` | New GPU-aware priority snapshot; Broker delivers it to the matching proxy. Emitted only on snapshot change (or forced tick). |
+| `schedule:priority` | scheduler → Broker | `{ engine, nodes: [string], ranks?: [NodeRank] }` | New resource-aware priority snapshot; Broker delivers it to the matching proxy. Emitted only on snapshot change (or forced tick). |
 | `errors:report` / `errors:clear` | scheduler → Broker | `ServiceError` / `{ id }` | Errors pipeline (§13). |
 | `workloads:upsert` / `workloads:remove` | Broker → scheduler | (WM shapes) | Workload stream (§6). |
-| `scheduler:telemetry` | Broker → scheduler | `{ hostUuid, gpuUtilizationPercent, telemetryValid, msSince }` | Compact maximum-GPU telemetry stream (§6). |
+| `scheduler:telemetry` | Broker → scheduler | `{ hostUuid, gpuUtilizationPercent, vramUtilizationPercent, vramUtilizationKnown, telemetryValid, msSince }` | Compact maximum-GPU and VRAM telemetry stream (§6). |
 | `discovery:nodes-changed` | Broker → scheduler | `[AvailableNode]` | Node-universe stream (§6). |
 
 ### 7.1 The `node/set-priority` proxy contract (delivered by the Broker)
@@ -240,14 +247,14 @@ proxy-side, §4). The scheduler never calls it — it only emits `schedule:prior
 
 - **Params**: `{ generation: uint64, nodes: [string], ranks?: [NodeRank] }` —
   a monotonic delivery generation, ordered node ids, and their authoritative
-  pending counts, GPU pressure, and pressure freshness. The Broker mints `generation` (always ≥ 1);
+  pending counts, GPU and VRAM pressure, and independent freshness. The Broker mints `generation` (always ≥ 1);
   the scheduler does not send it. **Required**: omitted or `0` is rejected with
   `-32602`, because a snapshot that cleared the proxy's reservations without
   advancing its applied epoch would let one taken before it release one taken
   after — the undercount this field exists to prevent.
 - **Semantics** (proxy): for each auto-routed model-bearing inference request,
-  atomically choose the minimum authoritative pending count plus GPU pressure
-  plus local reservations, then reserve that node before forwarding.
+  atomically choose the minimum authoritative pending count plus the maximum of
+  GPU and VRAM pressure plus local reservations, then reserve that node before forwarding.
   Consider only scheduler-listed nodes in the best available model tier; use
   scheduler order as the tie-break. **Unknown ids are ignored.** A **known node
   not in the list** remains a lowest-priority fallback, and an **empty list**
@@ -275,14 +282,15 @@ Let `D` = current discovered-node `hostUuid`s:
    `state ∈ {queued, running}` and `scheduledOn ∈ D`, regardless of engine; group
    by `scheduledOn` → `pending[id]`. Every `id ∈ D` not present gets `0` (idle
    nodes included).
-2. **Pressure**: for each valid sample with effective age
+2. **Pressure**: for each valid GPU or VRAM sample with effective age
    `msSince + elapsedSinceReceipt ≤ 10 s`, clamp utilization to 0–100 and update
    an EWMA with alpha 0.35. Map it to pressure 0 below 40%, 1 below 70%, 2 below
    85%, else 3. A band drops only below 35%/65%/80%. Invalid, missing, or stale
-   telemetry yields pressure 1; the first fresh sample after a gap resets the
-   EWMA. The input is the maximum across GPUs, deliberately conservative.
-3. **Sort** `D` ascending by `pending[id] + gpuPressure[id]`, then
-   `gpuPressure[id]`, then `id`.
+   telemetry makes that signal unknown; the first fresh sample after a gap resets
+   its EWMA. Each input is the maximum across GPUs. When both signals are unknown,
+   effective pressure is neutral 1.
+3. **Sort** `D` ascending by `pending[id] + maxKnownPressure[id]`, then
+   effective pressure, then `id`.
 4. **Publish** the shared snapshot through
    `schedule:priority {engine, nodes, ranks}` for each supported engine. Emit only
    when its order, pending counts, pressure, or pressure freshness differ from the last emission (a
@@ -299,7 +307,7 @@ signal.
 ### 7.3 Selection-state (proxy side, for reference)
 
 Effective target: `manual pin (node/select)` → else
-`pending + gpuPressure + local reservations within the priority list` → else
+`pending + max(gpuPressure, vramPressure) + local reservations within the priority list` → else
 `default auto`. A snapshot delivered while a pin is active is stored but doesn't
 move traffic; clearing the pin activates the most-recent snapshot.
 `node/selection-changed` fires only for the active target.
@@ -345,7 +353,7 @@ side.
 - `scheduler:*` / `schedule:*` / `node/set-priority` names are namespaced and
   additive — new capabilities are new methods.
 - The added `ranks` field is optional: older consumers continue using
-  `{engine,nodes}`, while current proxies use pending counts and GPU pressure for
+  `{engine,nodes}`, while current proxies use pending counts and GPU/VRAM pressure for
   local reservations.
 
 ## 8. Dependencies
@@ -355,7 +363,7 @@ side.
 - **Downstream (via the Broker)**: each `nvpair-proxy` instance (receives
   `node/set-priority`); `nvpair-errors` (receives `errors:*`). No direct link to any.
 - **Data sources (via the Broker)**: `nvpair-workload-manager` + proxies
-  (workloads), `nvpair-node-scanner` / manual nodes (discovery and GPU telemetry).
+  (workloads), `nvpair-node-scanner` / manual nodes (discovery and GPU/VRAM telemetry).
 - **External**: `nvpair-shared/applog`, `nvpair-shared/jsonrpc`, `nvpair-shared/errors`. No
   third-party services, no network stack.
 

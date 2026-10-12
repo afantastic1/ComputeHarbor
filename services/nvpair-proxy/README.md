@@ -179,7 +179,8 @@ One limit is outside the proxy's control: current Chromium-based browsers gate a
 - **Auto**: When no eligible node is explicitly selected, the proxy follows
   `node/set-priority`, then discovered nodes in stable ID order.
 - **Priority (scheduler-driven)**: The Job Scheduler ranks the cluster
-  least-loaded-first by pending workload plus smoothed GPU pressure and, via
+  least-loaded-first by pending workload plus the higher known value of
+  smoothed GPU and VRAM pressure and, via
   `nvpair-ui-broker`, pushes the ordered node list with those per-node counts to
   this proxy with `node/set-priority`. Auto routing sends the request to the
   listed node carrying the least estimated load. See

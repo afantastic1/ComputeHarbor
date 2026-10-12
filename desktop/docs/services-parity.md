@@ -117,16 +117,17 @@ Routing precedence is manual selection, scheduler priority, then deterministic
 proxy ordering. Personal AI Router leaves proxies in automatic mode.
 
 `nvpair-job-scheduler` combines total queued and running workload across all
-enabled engines with a smoothed 0–3 GPU-pressure signal. The backend scanner and
-manual node worker provide maximum-GPU utilization, while invalid, missing, or
-older-than-10-second samples receive neutral pressure. The scheduler emits
-order, pending count, pressure, and pressure freshness; the broker forwards each `schedule:priority`
+enabled engines with independently smoothed 0–3 GPU compute and VRAM utilization
+pressure. The backend scanner and manual node worker provide maximum GPU and
+maximum valid per-GPU VRAM utilization. Invalid, missing, or older-than-10-second
+signals are unknown; both unknown produces neutral pressure 1. The scheduler emits
+order, pending count, both pressures, and their freshness; the broker forwards each `schedule:priority`
 snapshot to the matching facade through `node/set-priority`. Each facade adds
 local reservations, so its estimate is
-`pending + gpuPressure + localReservations` during concurrent bursts.
+`pending + max(gpuPressure, vramPressure) + localReservations` during concurrent bursts.
 
-Current limitation: pressure does not represent GPU capability or available
-VRAM, and a multi-GPU node is represented by its busiest device rather than
+Current limitation: pressure does not represent GPU capability or absolute
+available VRAM, and a multi-GPU node is represented by its busiest device rather than
 engine-to-device affinity.
 
 ### Secure inference transport

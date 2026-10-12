@@ -15,9 +15,9 @@ Concretely, the daemon:
 - **Samples scheduling telemetry** from healthy nodes every two seconds with
   stable per-node jitter. Consecutive remote failures back off to 4, 8, 16, then
   30 seconds and reset on success; local loopback sampling stays at the healthy
-  cadence. It emits only host UUID, maximum GPU utilization, validity, and
-  source-reported sample age; it does not mutate the public directory for each
-  telemetry sample.
+  cadence. It emits only host UUID, maximum GPU utilization, the highest valid
+  per-GPU used/total VRAM percentage, their validity, and source-reported sample
+  age; it does not mutate the public directory for each telemetry sample.
 - **Annotates trust:** with `--cluster-dir`, a browsed peer whose `cluster-uuid=` this node holds a pin for is marked `trusted` (via `nvpair-shared/clustertrust`). The annotation is re-derived on `discovery:reload-trust`, which the broker sends when `nvpair-cluster-manager` reports a pin-set change, as well as when a peer's mDNS record changes. Both triggers are needed: a peer that was already advertising when this node joined never moves its record again, so the browse path alone would leave it annotated from before this node's own pins existed. A change emits one `discovery:node-updated`; a reload that finds nothing to change is silent.
 - **Advertises live membership:** the same reload re-derives this node's own `cluster-uuid=` from the cluster dir and re-advertises when it differs from what is being published, so joining or leaving a cluster takes effect without a restart.
 - **Anti-flap:** a node has to be absent from every scan for the browser's full miss threshold (twelve scans at 5s, a full minute) before it is evicted, and from ~15s in it is TCP-probed on its advertised service ports on *every* scan — any answer resets the counter and recovers it outright. So neither a momentary multicast gap nor a sustained one drops a healthy node, and eviction rests on a run of ~10 consecutive failures rather than one dial on the deadline. The window is sized deliberately: a node saturated by its own inference load starves its control plane, so it stops answering mDNS *and* stops accepting probe connections for as long as the load runs, while still serving requests. Two signals can also vouch for a node without any probe — a node-info enrichment in the last 10s, and inference response bytes from it in the last 60s (`discovery:node-activity`, relayed by the broker from whichever proxy saw the bytes). The second is the only liveness evidence that gets stronger the busier a node is.
@@ -81,8 +81,8 @@ Emitted as the directory changes. Each carries the affected `DirectoryNode` (ide
 - `discovery:node-discovered` — a new node entered the directory
 - `discovery:node-updated` — a known node's record or enrichment changed. A re-observation that changes nothing emits no event, so `lastSeen` is a last-*change* stamp rather than a liveness heartbeat
 - `discovery:node-removed` — a node aged out (identity + last-known fields)
-- `discovery:node-telemetry` — compact maximum-GPU utilization, validity, and
-  sample age for broker-internal scheduling
+- `discovery:node-telemetry` — compact maximum-GPU utilization, maximum valid
+  VRAM utilization, their validity, and sample age for broker-internal scheduling
 
 A one-shot `ready` notification is sent on startup carrying the daemon version. The broker replays its service registrations on every scanner spawn, so a restarted daemon is repopulated without needing to compare an epoch.
 

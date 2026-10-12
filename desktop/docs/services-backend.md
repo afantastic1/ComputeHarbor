@@ -103,9 +103,9 @@ polls each healthy discovered node's advertised `/v1/node-info` endpoint every
 two seconds and merges CPU, memory, GPU, and VRAM data into `metrics:update`;
 consecutive failures back off to a 30-second cap and reset on success.
 Those renderer snapshots are display-only. Independently, the backend scanner
-samples a compact maximum-GPU utilization value on the same healthy cadence,
-with the same capped failure backoff, and sends it through the broker to the
-scheduler.
+samples compact maximum-GPU and maximum valid VRAM-utilization values on the
+same healthy cadence, with the same capped failure backoff, and sends them
+through the broker to the scheduler.
 
 All other service control flows through broker JSON-RPC. Engine proxy HTTP is
 reserved for inference clients.
@@ -129,13 +129,13 @@ reserved for inference clients.
 | `workloads:upsert` / `workloads:remove`              | Update workload catalog                                                                                                         | workload pushes                                           |
 
 `nvpair-job-scheduler` combines queued and running work across all engines with
-a smoothed 0–3 pressure from the busiest GPU. Invalid, missing, or
-older-than-10-second telemetry receives neutral pressure. It emits
-`schedule:priority` with order, pending count, pressure, and a pressure freshness
+independently smoothed 0–3 GPU compute and VRAM utilization pressure. Invalid,
+missing, or older-than-10-second signals are unknown; both unknown produces
+neutral pressure 1. It emits `schedule:priority` with order, pending count, both pressures, and freshness
 flag; the broker applies each snapshot to the matching proxy through `node/set-priority`
 (generation-ordered so a stale async call cannot overwrite a newer snapshot,
 and re-pushed when a proxy respawns). Each proxy atomically minimizes
-`pending + gpuPressure + localReservations`, so simultaneous requests account
+`pending + max(gpuPressure, vramPressure) + localReservations`, so simultaneous requests account
 for one another before workload feedback arrives. None of this internal
 scheduling traffic is forwarded to Personal AI Router.
 

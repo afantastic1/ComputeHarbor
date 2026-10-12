@@ -183,8 +183,10 @@ Cloud routing has three persisted policies: `local_only`, `prefer_local`, and
 `cloud_only`. `local_only` rejects explicit `cloud/...` IDs and `auto-cloud`.
 `prefer_local` keeps automatic aliases on a compatible local deployment unless
 there is no compatible, routable local deployment or every such deployment has
-fresh, known GPU pressure at `schedulerwire.MaxGPUPressure`; unknown pressure,
-CPU inference, pending work, and in-flight reservations do not count as busy.
+fresh, known GPU or VRAM pressure at `schedulerwire.MaxGPUPressure`. Either
+known saturated signal marks that candidate saturated. A candidate with no
+saturated signal and either signal unknown has unknown capacity; unknown
+capacity, CPU inference, pending work, and in-flight reservations do not count as busy.
 Only then may `allowPaidFallback` permit an automatic alias to use the one
 configured `fallbackCloudModel`. `cloud_only` sends automatic aliases directly
 to that same configured model. `auto-cloud` is an explicit Cloud request and
@@ -584,10 +586,10 @@ approve. See README.md for the complete forwarding and intersection rules.
 
 A reservation is one in-flight dispatch this process has made since the last
 scheduler snapshot. Estimated load for a node is
-`pending + gpuPressure + reservations`, the first two from the scheduler. The
-scheduler reports whether GPU pressure reflects fresh telemetry separately
-from its numeric neutral value; consumers must not infer freshness from the
-pressure band alone.
+`pending + max(gpuPressure, vramPressure) + reservations`; the scheduler supplies
+the first three resource values. The scheduler reports whether each pressure
+reflects fresh telemetry separately from its numeric value; consumers must not
+infer freshness from the pressure band alone.
 
 - **Taken** when a candidate is chosen, unless an eligible manual pin applies,
   and re-taken through the same path on each retry round (§5.1).
@@ -616,11 +618,11 @@ a redelivered snapshot must not clear live reservations.
 
 The Broker reports the supervised Scheduler process state through the
 process-scoped `node/set-scheduler-health {healthy}` method. A down report makes
-Gateway model scoring treat pending and GPU pressure as unknown. It does not
+Gateway model scoring treat pending, GPU pressure, and VRAM pressure as unknown. It does not
 clear or rewrite the priority snapshot, reservations, or generation used by
 official Proxy node placement. On older Scheduler payloads,
-`gpuPressureKnown` is absent and therefore false for Gateway scoring, while the
-numeric pressure remains available to the existing Proxy placement algorithm.
+`gpuPressureKnown` and `vramPressureKnown` are absent and therefore false for
+Gateway scoring, while numeric pressure remains available to Proxy placement.
 
 Gateway inventory obtains eligible node IDs from one read-only candidate-view
 pass per facade. The advertised model inventory is paired with the Proxy's
