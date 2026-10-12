@@ -28,6 +28,7 @@ Use the GPUs and devices you already own. Keep local work local when possible, a
 - **Workload-aware scheduling:** take model availability, current work, and available resource telemetry into account rather than blindly round-robin requests.
 - **Local-first with controlled cloud access:** configure an OpenAI-compatible provider, choose a routing policy, and explicitly authorize potential paid fallback.
 - **Agent-friendly routing:** use explicit model IDs or the `auto`, `auto-fast`, `auto-balanced`, and `auto-best` aliases.
+- **External Strata engine:** connect to a separately running [Strata](https://github.com/Niko1221/Strata) instance on a PC, detect its advertised models, and include it in local routing without managing its process or weights.
 - **Experimental Android node:** run an MNN-backed local model on supported ARM64 Android devices and participate in the same routing system.
 
 ComputeHarbor is **not** a model-training framework, hosted commercial API reseller, GPU-memory pooling system, or tensor-parallel inference engine. A request is dispatched to one execution target; multiple devices do not combine their VRAM to run a single oversized model.
@@ -49,8 +50,8 @@ AI agents / applications / OpenAI-compatible clients
          /     |     \       (opt-in,
         v      v      v      budgeted)
      Ollama  LM Studio  llama.cpp
-        \
-         Android MNN node (experimental)
+       |             |           \
+   Strata (external) |   Android MNN (experimental)
 ```
 
 Each local node runs an inference engine appropriate to its hardware. The router selects among eligible **model/node deployments**. Cloud providers are separate execution targets, not virtual LAN nodes.
@@ -63,6 +64,7 @@ The table describes code present in this repository, **not** a claim of producti
 | --- | --- | --- |
 | Windows, Linux, macOS desktop and Go services | Available in source | Electron desktop, discovery, pairing, and engine management inherited from the upstream architecture |
 | Ollama, LM Studio, llama.cpp | Available in source | Local engine facades and model-aware request routing; runtime support depends on the device and engine |
+| Strata (externally managed local engine) | Experimental integration | Loopback connection settings, model probe, proxy facade and routing code exist; independent live Strata and multi-node acceptance remain to be verified |
 | Unified OpenAI-compatible gateway | Available in source | Local `/v1/models` and `/v1/chat/completions` on loopback |
 | Automatic model selection | Available in source | `auto`, `auto-fast`, `auto-balanced`, `auto-best`; request-specific `auto-local` and `auto-cloud` |
 | Configurable cloud providers and local-first fallback | Experimental | Explicit opt-in, selected fallback model, authorization and budget controls; end-to-end deployments still need validation |
@@ -118,6 +120,19 @@ The desktop includes cloud provider configuration and a choice among `local_only
 
 Budget reservations are safeguards, **not** a substitute for provider invoices or exact per-token billing. Check provider terms before operating any paid or resale service.
 
+## Strata (external local inference engine, experimental)
+
+[Strata](https://github.com/Niko1221/Strata) is integrated as an **externally managed, local inference engine**, not as a cloud provider or a second ComputeHarbor physical node. This is useful when a PC runs a large model through Strata's own runtime: ComputeHarbor can treat its advertised models as candidates for **request-level** routing alongside Ollama, LM Studio and llama.cpp. It does **not** merge GPU memory across ComputeHarbor nodes or claim any specific model-size capability on your hardware.
+
+**Current source integration:** shared engine identity, a dedicated proxy facade, Broker model discovery/advertisement, a desktop **Strata (External)** settings card, and unit tests for connection validation and routing. **Limitations:** an end-to-end test with a real Strata process and cross-device workload is still required before declaring production support. ComputeHarbor does not install, launch, update, stop or manage Strata models for you.
+
+1. Install and run Strata **separately on the same PC** following its [upstream documentation](https://github.com/Niko1221/Strata). Keep its OpenAI-compatible service bound to local loopback.
+2. Check that Strata actually exposes a compatible model inventory: `curl http://127.0.0.1:8080/v1/models` (change the port to match your Strata configuration).
+3. In ComputeHarbor desktop settings, find **Strata (External)**. Enter the local endpoint (root URL or `/v1`), optionally select the expected model ID, and provide an **environment variable name** if authentication is required (never paste an API key into that field).
+4. Use **Test connection**, enable the integration, and **Save Strata settings**. Then inspect ComputeHarbor's `/v1/models` list and test an explicit Strata-backed model through its unified local gateway.
+
+A successful `GET /v1/models` probe checks connectivity and model identity; it does not prove generation, tool-calling or streaming quality. Verify your actual Strata model and driver setup before enabling automatic routing. For design/acceptance boundaries, see the [Strata integration plan](docs/PAIR_Strata_Integration_Plan%20(1).md).
+
 ## Android (experimental)
 
 The `android/` module contains an ARM64 Android application and optional local MNN inference runtime. Model weights are **not** bundled. For the device setup, verified Model Hub limitations, Android API endpoints and acceptance commands, see [android/README.md](android/README.md).
@@ -150,6 +165,7 @@ This is a direction, not a promise or shipping schedule.
 - [ ] Complete ComputeHarbor branding, documentation and independent release pipeline.
 - [ ] Validate cloud-provider fallback, permissions, budgets and error handling across realistic multi-node workloads.
 - [ ] Expand repeatable Android MNN device coverage and acceleration compatibility.
+- [ ] Complete real-Strata protocol, streamed chat and multi-node integration acceptance; validate model capabilities before broad auto-routing.
 - [ ] Improve capability-aware routing, observability and successful-request cost measurements.
 - [ ] Explore managed high-memory inference clusters as a single schedulable execution target.
 - [ ] Add further inference backends and media workflows where appropriate.
