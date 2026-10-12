@@ -37,21 +37,24 @@ ComputeHarbor is **not** a model-training framework, hosted commercial API resel
 
 ```text
 AI agents / applications / OpenAI-compatible clients
-                       |
-                       v
-           ComputeHarbor local API
-          127.0.0.1:14326/v1
-                       |
-             Model & policy routing
-                 /           \
-                v             v
-        Local inference    Optional cloud
-        and paired nodes    API provider
-         /     |     \       (opt-in,
-        v      v      v      budgeted)
-     Ollama  LM Studio  llama.cpp
-       |             |           \
-   Strata (external) |   Android MNN (experimental)
+                        |
+                        v
+             ComputeHarbor Gateway
+              127.0.0.1:14326/v1
+                        |
+                 Model & policy routing
+                   /             \
+                  v               v
+        Local devices/engines   Cloud provider
+                  |              (opt-in)
+             +----+-------------------+
+             | Ollama                |
+             | LM Studio             |
+             | llama.cpp             |
+             | Strata (external)*    |
+             | Android MNN*          |
+             +-----------------------+
+        * Experimental integration
 ```
 
 Each local node runs an inference engine appropriate to its hardware. The router selects among eligible **model/node deployments**. Cloud providers are separate execution targets, not virtual LAN nodes.
