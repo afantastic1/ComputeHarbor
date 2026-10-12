@@ -2683,6 +2683,7 @@ func subscribedToNode(p engineProfile, n noderec.DirectoryNode) (Node, bool) {
 	// machines. Host stays the hostname (display / dial name). A relay
 	// DirectoryNode always carries a hostUuid (the scanner guarantees it at the
 	// browse boundary), so there is no name fallback here.
+	loadedModels, loadedModelsKnown := n.LoadedByEngine[p.Name]
 	return Node{
 		ID:   n.HostUUID,
 		Host: n.Name,
@@ -2699,8 +2700,9 @@ func subscribedToNode(p engineProfile, n noderec.DirectoryNode) (Node, bool) {
 		// a model that a dual-engine node serves solely via LM Studio isn't
 		// accepted as an Ollama owner here (falls back to the union for a peer
 		// that sends no attribution — see DirectoryNode.EngineModels).
-		Models:       append([]string(nil), n.EngineModels(p.Name)...),
-		LoadedModels: append([]string(nil), n.LoadedByEngine[p.Name]...),
+		Models:            append([]string(nil), n.EngineModels(p.Name)...),
+		LoadedModels:      append([]string(nil), loadedModels...),
+		LoadedModelsKnown: loadedModelsKnown,
 	}, true
 }
 

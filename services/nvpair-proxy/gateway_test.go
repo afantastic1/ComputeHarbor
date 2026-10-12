@@ -963,6 +963,35 @@ func TestPreferLocalAutoUsesCloudOnlyForNoCapacityOrEntirelyBusyLocalInventory(t
 	}
 }
 
+func TestPreferLocalAutoUsesCloudWhenLMStudioHasNoLoadedModel(t *testing.T) {
+	const model = "qwen3-8b"
+	proxy := newGatewayProxyWithTwoCloudModels(t)
+	lmstudio, ok := profileFor("lmstudio")
+	if !ok {
+		t.Fatal("load LM Studio profile")
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(server.Close)
+	discovery := NewDiscovery()
+	node := nodeForModel(t, "pc-a", server.URL, model)
+	node.LoadedModelsKnown = true
+	discovery.AddManual(node)
+	proxy.facades = map[string]*facade{"lmstudio": newFacade(proxy, lmstudio, discovery, 1234)}
+	proxy.gatewayDispatcher.settings.Store(&gatewayRoutingSettings{
+		cloudEnabled: true, policy: gatewayPolicyPreferLocal,
+		allowPaidFallback: true, fallbackCloudModel: "cloud/provider/selected",
+	})
+	proxy.gatewayDispatcher.resolveCredential = func(string) (string, error) { return "provider-key", nil }
+
+	route, dispatchErr := proxy.gatewayDispatcher.resolve(AUTO_ALIAS, []byte(`{"messages":[]}`))
+	if dispatchErr != nil {
+		t.Fatalf("resolve auto: %+v", dispatchErr)
+	}
+	if got := route.cloudTarget.PublicID; got != "cloud/provider/selected" {
+		t.Fatalf("selected cloud model=%q, want configured fallback for unloaded LM Studio inventory", got)
+	}
+}
+
 func TestPreferLocalAutoKeepsAndroidMNNCandidateLocalWhenGPUPressureIsUnknown(t *testing.T) {
 	proxy := newGatewayProxyWithTwoCloudModels(t)
 	mnn, ok := profileFor("mnn")

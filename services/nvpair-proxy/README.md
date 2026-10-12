@@ -185,6 +185,10 @@ One limit is outside the proxy's control: current Chromium-based browsers gate a
   this proxy with `node/set-priority`. Auto routing sends the request to the
   listed node carrying the least estimated load. See
   [`nvpair-job-scheduler`](../nvpair-job-scheduler/README.md).
+- **LM Studio residency**: An installed LM Studio model is eligible for automatic
+  local selection only when discovery confirms it is currently loaded. Under
+  `prefer_local`, a known empty loaded set can therefore select the configured
+  Cloud fallback; missing loaded-state telemetry remains unknown and stays local.
 - **Manual**: `node/select` pins traffic to a specific node. A manual pin
   **overrides the priority list only when that node is eligible** for the
   requested model.

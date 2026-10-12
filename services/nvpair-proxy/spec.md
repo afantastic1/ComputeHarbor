@@ -208,6 +208,11 @@ credential or budget preflight may use the already-resolved local route when one
 exists. Once a Cloud request is sent, Provider errors and stream failures are
 returned without replaying the prompt against another model.
 
+For LM Studio, a model whose loaded-state inventory is
+known and does not list that model is unavailable to automatic local selection;
+an absent loaded-state report remains unknown and cannot alone trigger paid
+Cloud fallback.
+
 ## 4. Addressing
 
 Every facade-scoped message carries the engine it concerns, in both directions.

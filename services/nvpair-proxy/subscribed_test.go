@@ -158,6 +158,9 @@ func TestSubscribedToNode(t *testing.T) {
 				tc.profile.Name: {"mine"},
 				other.Name:      {"theirs"},
 			},
+			LoadedByEngine: map[string][]string{
+				tc.profile.Name: {},
+			},
 			Services: map[noderec.ServiceKey]noderec.ServiceStatus{
 				tc.profile.DiscoveryService: {Port: tc.profile.FacadePort},
 			},
@@ -168,6 +171,9 @@ func TestSubscribedToNode(t *testing.T) {
 		}
 		if len(got.Models) != 1 || got.Models[0] != "mine" {
 			t.Fatalf("dual-engine projection Models = %v, want [mine] only", got.Models)
+		}
+		if !got.LoadedModelsKnown || len(got.LoadedModels) != 0 {
+			t.Fatalf("dual-engine loaded projection = %+v, want known empty resident set", got)
 		}
 	})
 }

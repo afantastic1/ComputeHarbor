@@ -90,6 +90,9 @@ func (p *Proxy) gatewayInventory() []modelselection.RuntimeModel {
 						break
 					}
 				}
+				if engine == "lmstudio" && node.LoadedModelsKnown && !candidate.Loaded {
+					candidate.Available = false
+				}
 				if resource, ok := priority.nodes[node.ID]; ok && !priority.schedulerUnavailable {
 					candidate.PendingRequests = resource.pending
 					candidate.PendingKnown = resource.pendingKnown
