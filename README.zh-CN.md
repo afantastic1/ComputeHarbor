@@ -38,18 +38,22 @@ ComputeHarbor 是一个开源、**本地优先**的异构 AI 推理路由项目�
 AI Agent / 应用 / OpenAI 兼容客户端
                     |
                     v
-           ComputeHarbor 本地 API
-            127.0.0.1:14326/v1
+         ComputeHarbor 统一网关
+          127.0.0.1:14326/v1
                     |
-             模型能力与策略路由
-                 /       \
-                v         v
-        本地推理及配对节点   可选云 API
-          /    |     \    （主动启用、
-         v     v      v     预算约束）
-      Ollama LM Studio llama.cpp
-         |         |          \
-     Strata（外部）   |    Android MNN（实验性）
+              模型能力与策略路由
+               /             \
+              v               v
+       本地设备与推理引擎     云端 Provider
+              |            （主动启用）
+         +-------------------------+
+         | Ollama                  |
+         | LM Studio               |
+         | llama.cpp               |
+         | Strata（外部）*          |
+         | Android MNN*            |
+         +-------------------------+
+          * 实验性集成
 ```
 
 云 Provider 不作为虚拟局域网节点；本地节点调度与付费云端执行分别处理。
