@@ -1,346 +1,171 @@
 <!--
 SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0
+
+This README has been substantially rewritten for the independent ComputeHarbor project.
+See "Upstream, attribution, and license" below.
 -->
 
-# NVIDIA Personal AI Router (PAIR)
+# ComputeHarbor
 
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Security Policy](https://img.shields.io/badge/security-policy-green.svg)](SECURITY.md)
+**One API for your local AI compute, distributed devices, and optional cloud models.**
 
-NVIDIA Personal AI Router (PAIR), shown as **NVIDIA PAIR** once installed, is a
-local inference router for a group of compatible computers on the same network. It discovers participating nodes,
-manages supported inference engines, and presents local proxy endpoints for
-Ollama-compatible, OpenAI-compatible, and Anthropic Messages API requests.
-Independent requests can be routed to eligible nodes according to engine
-availability, model availability, and current workload.
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+[![Stage: Early development](https://img.shields.io/badge/Stage-Early%20development-orange.svg)](#project-status)
 
-PAIR is useful for concurrent local workloads such as multi-agent applications.
-Prompts and responses are intended to remain on the local network when every
-configured client, model source, engine, and node is local.
+**English** | [简体中文](README.zh-CN.md)
 
-> PAIR routes each independent request to one node. It does **not** pool GPU
-> memory, combine GPUs into a larger logical GPU, shard one model across
-> machines, or split an in-flight inference request between nodes.
+ComputeHarbor is an open-source, **local-first inference router** for heterogeneous AI devices. It discovers and connects compatible machines, schedules independent inference requests across available models and nodes, and exposes an OpenAI-compatible interface for applications and AI agents. An opt-in cloud provider path can handle requests when configured routing policies permit it.
 
-![Two paired machines in PAIR's Overview. Requests arrive on one and are routed
-across both, with each node reporting live GPU and memory use.](assets/pair-demo.gif)
+Use the GPUs and devices you already own. Keep local work local when possible, and decide explicitly when a request may use a paid cloud model.
 
-*Two paired machines: requests arrive on one, run on whichever node suits each
-one, and both report live GPU and memory use throughout.
-[Watch the full clip](assets/pair-demo.mp4).*
+> **Early development:** This repository has not yet published a ComputeHarbor-branded stable release. Some interfaces, configuration formats, and platform integrations remain experimental. Do not confuse this source tree with NVIDIA's official releases.
 
-## What is supported
+## Why ComputeHarbor?
 
-| | |
-| --- | --- |
-| **Operating systems** | Windows 11; Linux; macOS |
-| **Architectures** | x64 and arm64 on all three. Windows on ARM is experimental. |
-| **Installers** | Windows `.exe`; Linux `.deb`; macOS `.dmg`. On other Linux distributions, [build from source](docs/building.mdx). |
-| **Mixing nodes** | Windows, Linux, and macOS nodes can all be paired with each other |
-| **Inference engines** | Ollama, LM Studio, and llama.cpp |
+- **One local API:** point compatible tools at a single model catalog and chat-completions endpoint instead of configuring every inference engine separately.
+- **Multiple devices and engines:** discover or manually add nodes; route a request to an eligible node with the requested model.
+- **Workload-aware scheduling:** take model availability, current work, and available resource telemetry into account rather than blindly round-robin requests.
+- **Local-first with controlled cloud access:** configure an OpenAI-compatible provider, choose a routing policy, and explicitly authorize potential paid fallback.
+- **Agent-friendly routing:** use explicit model IDs or the `auto`, `auto-fast`, `auto-balanced`, and `auto-best` aliases.
+- **Experimental Android node:** run an MNN-backed local model on supported ARM64 Android devices and participate in the same routing system.
 
-**PAIR running on a machine does not mean an engine will.** PAIR itself runs on
-any supported Windows, Linux, or macOS machine. Each engine sets its own requirements
-for the operating system, GPU, and drivers, and each model needs enough memory to
-load. Whether a particular engine and model work on a particular machine is
-between that engine and that machine, so check the engine's own documentation
-before assuming a node can serve a model. A node only becomes a candidate for a
-request once it is actually running a compatible engine, and PAIR prefers the
-nodes it already knows hold the model.
+ComputeHarbor is **not** a model-training framework, hosted commercial API reseller, GPU-memory pooling system, or tensor-parallel inference engine. A request is dispatched to one execution target; multiple devices do not combine their VRAM to run a single oversized model.
 
-## Quick start
+## Architecture
 
-Download a released build and use the desktop application. That is the path we
-recommend and the one the rest of this guide assumes. Building from source and
-the terminal interface both exist for good reasons — changing PAIR, and machines
-with no desktop — but neither is the ordinary way in. Those are covered in
-[Building and running PAIR from source](docs/building.mdx) and
-[Terminal interface](docs/terminal-interface.mdx).
-
-### Download a release
-
-A released installer is signed, sets up the background services and the desktop
-application together, and adds the firewall rules PAIR needs on Windows. It also
-tells you when a newer release exists and installs it on your say-so from
-**Settings → Service**. A build you make yourself is unsigned and checks no
-update feed, so you would upgrade it by pulling and rebuilding.
-
-Download PAIR from the
-[GitHub releases page](https://github.com/NVIDIA/Personal-AI-Router/releases).
-Release downloads include:
-
-- a Windows installer;
-- a Debian package for Linux; and
-- a macOS disk image.
-
-**On Windows and macOS,** double-click the download and follow the installer's
-usual prompts — on macOS that means dragging **NVIDIA PAIR** to your
-**Applications** folder.
-
-**On Linux,** install the package from the directory you downloaded it into:
-
-```bash
-sudo apt install ./NVPAIR-Setup-*.deb
+```text
+AI agents / applications / OpenAI-compatible clients
+                       |
+                       v
+           ComputeHarbor local API
+          127.0.0.1:14326/v1
+                       |
+             Model & policy routing
+                 /           \
+                v             v
+        Local inference    Optional cloud
+        and paired nodes    API provider
+         /     |     \       (opt-in,
+        v      v      v      budgeted)
+     Ollama  LM Studio  llama.cpp
+        \
+         Android MNN node (experimental)
 ```
 
-If you have kept more than one PAIR package in that directory, install the one
-you want by its full filename instead.
+Each local node runs an inference engine appropriate to its hardware. The router selects among eligible **model/node deployments**. Cloud providers are separate execution targets, not virtual LAN nodes.
 
-### Run it
+## Project status
 
-- **Open PAIR** the way you would any application — the Start menu on Windows,
-  Launchpad or the Applications folder on macOS, your applications list on Linux.
-  On a machine with no desktop environment, drive it from the
-  [terminal interface](docs/terminal-interface.mdx) instead, which starts the same
-  background services and gives you a full-screen view in the terminal.
+The table describes code present in this repository, **not** a claim of production readiness on every device.
 
-- **Let it finish starting.** **Overview** shows this machine once the services
-  are up. If it stays on **Loading...**, open **Settings → Service** and read the
-  status there.
+| Area | Status | Notes |
+| --- | --- | --- |
+| Windows, Linux, macOS desktop and Go services | Available in source | Electron desktop, discovery, pairing, and engine management inherited from the upstream architecture |
+| Ollama, LM Studio, llama.cpp | Available in source | Local engine facades and model-aware request routing; runtime support depends on the device and engine |
+| Unified OpenAI-compatible gateway | Available in source | Local `/v1/models` and `/v1/chat/completions` on loopback |
+| Automatic model selection | Available in source | `auto`, `auto-fast`, `auto-balanced`, `auto-best`; request-specific `auto-local` and `auto-cloud` |
+| Configurable cloud providers and local-first fallback | Experimental | Explicit opt-in, selected fallback model, authorization and budget controls; end-to-end deployments still need validation |
+| Android ARM64 + MNN | Experimental | CPU runtime, model management, LAN pairing and routing; OpenCL is optional and device-dependent |
+| Production public API gateway, accounts and billing | Not included | Requires a separately secured gateway, authentication, metering, rate limits and operations |
+| Cross-device model sharding / pooled VRAM | Not supported | A single inference request is not split across machines |
+| Image/video generation and distributed media workflows | Planned | Not part of the current text chat API |
 
-- **Get an engine running.** On the node's card, open **Engine settings** and
-  select **Install** next to Ollama, LM Studio, or llama.cpp. PAIR downloads and
-  sets the engine up for you, so nothing needs to be in place beforehand.
+Some Android device acceptance tests are documented in [Android README](android/README.md) and [test reports](docs/M12_5_TEST_REPORT.md). Those results do not guarantee compatibility with other phones, models, or drivers.
 
-  ![The Install engines dialog with Ollama downloading, reporting progress as it installs.](docs/assets/onboarding/engine-lifecycle/01-engine-installing.png)
+## Quick start (desktop, from source)
 
-- **Add a model.** Select **Add model** on the same card and download one.
-  `qwen4:12b` is used for this example; it can be replaced with a model of your
-  choice. llama.cpp populates this list from popular GGUF repositories on
-  Hugging Face. Type to filter the list, or press Enter to search the wider
-  public catalog. Its exact IDs include the repository and quantization, such
-  as `ggml-org/gemma-3-1b-it-GGUF:Q4_K_M`.
-
-  ![A node card with its engine expanded, one model pulling and the Add model button beside the list.](docs/assets/onboarding/getting-started/07-add-model.png)
-
-- **Send a request.** Two equally good options:
-
-  - **Let PAIR generate the traffic.** Select **Test** on
-    **Settings → Service** and PAIR sends a minute of inference through the same
-    path, so you can watch the jobs appear without writing anything.
-
-    ![Overview during a test run, with jobs in flight across both machines in the cluster.](docs/assets/onboarding/getting-started/12-demo-traffic.png)
-
-  - **Send one yourself.** Use the `curl` call below. The job then appears under
-    **Jobs**, naming the node that served it.
-
-With Ollama on its default port, this runs as written:
+**Prerequisites:** Git, Node.js **25.5+**, Go **1.25+**, npm and `jq` on `PATH`. Refer to the [build guide](docs/building.mdx) for platform-specific details. Some older documents and internal binary names still use `PAIR`/`nvpair` during the branding transition.
 
 ```bash
-curl http://127.0.0.1:11434/v1/chat/completions \
+git clone https://github.com/afantastic1/ComputeHarbor.git
+cd ComputeHarbor/desktop
+npm install
+npm start
+```
+
+`npm start` builds the Go services from the adjacent `services/` directory and starts the Electron desktop application. From the UI, start or configure a supported inference engine, make a model available, and pair trusted machines if you want to route between devices.
+
+This is a **source development workflow**, not an officially signed ComputeHarbor installer. Do not download NVIDIA-branded installers and assume they contain ComputeHarbor's additions.
+
+### Call the unified local API
+
+When the runtime and gateway are running, inspect the advertised models:
+
+```bash
+curl http://127.0.0.1:14326/v1/models
+```
+
+Then send a chat request to an available explicit model ID or an automatic alias:
+
+```bash
+curl http://127.0.0.1:14326/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"qwen4:12b","messages":[{"role":"user","content":"In one sentence, what does a router do?"}]}'
+  -d '{
+    "model": "auto",
+    "messages": [{"role": "user", "content": "Hello from ComputeHarbor!"}],
+    "stream": false
+  }'
 ```
 
-The reply is ordinary OpenAI-shaped JSON, abbreviated here:
+The response depends on an eligible, running model and on your configured policy. Authentication may be required, especially when cloud execution is enabled; use the credential configured for your gateway and add an `Authorization: Bearer ...` header where required. A placeholder key accepted by a loopback-only development endpoint is **not** public-API authentication.
 
-```json
-{
-  "object": "chat.completion",
-  "model": "qwen4:12b",
-  "choices": [
-    {
-      "message": {
-        "role": "assistant",
-        "content": "A router decides where each incoming message should go and forwards it there."
-      },
-      "finish_reason": "stop"
-    }
-  ]
-}
-```
+Currently documented gateway operations cover **text chat and model discovery**. Do not assume arbitrary OpenAI endpoints (such as embeddings, image, audio or video APIs) are supported at this unified endpoint.
 
-If you changed a port, or you are using LM Studio or llama.cpp rather than
-Ollama, copy the URL from **Endpoints → API endpoints** instead of assuming the
-one above.
+### Optional cloud providers
 
-That is a single machine working. To route across machines, pair a second one
-from **Settings → Cluster** and repeat the engine and model steps there. The
-inviting machine shows a six-digit PIN, and you enter that PIN on the machine you
-invited.
+The desktop includes cloud provider configuration and a choice among `local_only`, `prefer_local`, and `cloud_only` policies. Configure an allowed provider, its model and credentials, a fallback model if needed, and budget/authorization limits before enabling paid requests. Automatic fallback is deliberately constrained: it is **not** a general-purpose cheapest-model optimizer or unlimited cloud failover mechanism.
 
-![The six-digit pairing PIN on the inviting machine beside the Cluster invitation modal on the machine being invited.](docs/assets/onboarding/getting-started/04-pairing-pin.png)
+Budget reservations are safeguards, **not** a substitute for provider invoices or exact per-token billing. Check provider terms before operating any paid or resale service.
 
-The [Getting Started Guide](docs/getting-started.mdx) covers the same ground in
-detail, plus pairing, ports, and connecting your own applications.
+## Android (experimental)
 
-## Uninstalling
+The `android/` module contains an ARM64 Android application and optional local MNN inference runtime. Model weights are **not** bundled. For the device setup, verified Model Hub limitations, Android API endpoints and acceptance commands, see [android/README.md](android/README.md).
 
-Removing PAIR and removing your data are separate steps, and the default is to
-keep your data.
-
-**Windows.** Uninstall from Apps & features, or the Start menu entry. The
-uninstaller stops PAIR, removes its firewall rules, and asks whether to delete
-your data. Decline and it stays; accept and it is removed.
-
-**Linux.** `sudo apt remove nvpair` uninstalls the application and keeps your
-data. Use `sudo apt purge nvpair` to remove the data as well. Run
-`dpkg -l | grep -i pair` first if you need to confirm the installed package name.
-A purge removes the engines PAIR installed under its own data directory, but not
-one a vendor installer placed in your home, as LM Studio does — uninstall that
-engine from PAIR before removing the package, or use its own uninstaller.
-
-**macOS.** Run the uninstaller that ships inside the app bundle. It stops PAIR,
-removes its firewall rules, unregisters its privileged helper, and then removes
-the application:
+From a configured Android build environment:
 
 ```bash
-sudo "/Applications/NVIDIA PAIR.app/Contents/Resources/installer-tools/uninstall-macos.sh"
+cd android
+./gradlew :app:assembleDebug
 ```
 
-An install from before the app was renamed is still called `PAIR.app`; use
-`/Applications/PAIR.app` in the path instead. Add `--purge` to remove your data
-as well. Dragging PAIR to the Trash instead
-leaves the privileged helper registered, so use the uninstaller.
+On Windows use `gradlew.bat :app:assembleDebug`. The default MNN build targets CPU; OpenCL is an explicit, device-dependent build option. An APK build passing is not proof that native inference works on a particular device.
 
-Your data means settings, logs, cluster identity and certificates, and any engine
-PAIR installed for you. An engine the uninstaller cannot remove — one still
-holding a file open, say — is left in place rather than stopping the uninstall;
-remove it with its own uninstaller. **Model weights are not touched** — they live in the
-engine's own storage (`~/.ollama`, `~/.llamacpp`, `~/.lmstudio/models`), so
-removing PAIR does not delete the models you downloaded. Delete those through the
-engine, or by removing its directory. An engine you installed yourself is also
-left alone.
+## Repository layout
 
-**To clear your data without uninstalling,** use **Settings → Service → Reset app
-data**. It removes the same set — settings, logs, cluster identity and
-certificates, and PAIR-installed engines — then restarts the application as if it
-were newly installed. Model libraries are left alone here too. This is the quickest
-way to start over after a broken cluster or a bad engine install.
+```text
+desktop/      Electron + React application
+services/     Go broker, discovery, scheduler, engine managers and proxies
+android/      Android UI, hosted services and MNN runtime
+docs/         Architecture, build instructions, contracts and engineering notes
+scripts/      Development and validation tooling
+```
 
-If this machine belongs to a cluster, deal with membership too — otherwise the
-other nodes keep listing it as a member. You have two options:
-
-- **Leave from this machine** before uninstalling: **Settings → Cluster →
-  Leave**, or press `l` on the terminal interface's **Nodes** tab and confirm
-  with `y`.
-- **Remove it from another node**, which any member can do from
-  **Settings → Cluster** by removing that node from the list.
-
-The second option works after the fact as well, so forgetting to leave first is
-recoverable.
-
-## Documentation
-
-If you are new to PAIR, reading in this order will get you productive fastest.
-Each entry assumes the ones before it.
-
-1. **[Overview](docs/overview.mdx)** — what PAIR does and how its pieces fit
-   together. Start here so the vocabulary in every other document makes sense.
-2. **[Getting started](docs/getting-started.mdx)** — install it, pair two
-   machines, prepare a model, and send a first request. This is the only document
-   most users need. When you update, **[Release notes](docs/release-notes.mdx)**
-   lists what changed and the **[Upgrade guide](docs/upgrade-guide.mdx)** covers
-   any steps the update needs.
-3. **[Managing engines](docs/engine-lifecycle.mdx)** — install, start, stop,
-   update, and uninstall engines; what PAIR restores after you quit or relaunch.
-4. **[Engine settings](docs/engine-settings.mdx)** — change an engine's ports and
-   its launch command, on this machine or a paired one, and give a browser access
-   to your models.
-5. **[Terminal interface](docs/terminal-interface.mdx)** — the same tasks from a
-   terminal, for a machine with no desktop environment. Skip it if every machine
-   you run has a desktop.
-6. **[Troubleshooting](docs/troubleshooting.mdx)** — worth skimming once before
-   you need it, so you know where the diagnostics live. Alongside it,
-   **[Known issues](docs/known-issues.mdx)** lists the significant limitations we
-   are already aware of, and
-   **[Collecting and sanitizing logs](docs/log-collection.mdx)** covers preparing
-   a log you can share.
-7. **[Architecture](docs/architecture.mdx)** — the process model, how a request is
-   routed, and where the trust boundaries are. Read this before changing
-   anything, or if you want to know why PAIR behaves the way it does.
-8. **[Building and running](docs/building.mdx)** — prerequisites, building from
-   source, running the services without the desktop application, and writing
-   your own client against the JSON-RPC API.
-9. **[Developer guide](docs/developing.mdx)** — read this before contributing:
-   where the code lives, how a change travels through the layers, and the
-   conventions the project enforces.
-
-Component references, for when you already know what you are looking for:
-
-- [Services](services/readme.md) — the background services, and from there each
-  component's own reference
-- [Desktop application](desktop/README.md) — working in the application, and from
-  there its architecture, contracts, and CLI documentation
-
-## Releases
-
-See the [releases page](https://github.com/NVIDIA/Personal-AI-Router/releases)
-for what changed in each release.
+For development, start with [the developer guide](docs/developing.mdx), [building from source](docs/building.mdx), [backend services](services/readme.md), and [Android runtime notes](android/README.md). Some imported documents, images and internal identifiers still refer to the original upstream project; these are being updated separately.
 
 ## Roadmap
 
-These are features we want to add to PAIR. This list is a direction for the
-project, not a commitment to delivery or implementation order. Community
-feedback and contributions will help shape priorities.
+This is a direction, not a promise or shipping schedule.
 
-### Platform support
+- [ ] Complete ComputeHarbor branding, documentation and independent release pipeline.
+- [ ] Validate cloud-provider fallback, permissions, budgets and error handling across realistic multi-node workloads.
+- [ ] Expand repeatable Android MNN device coverage and acceleration compatibility.
+- [ ] Improve capability-aware routing, observability and successful-request cost measurements.
+- [ ] Explore managed high-memory inference clusters as a single schedulable execution target.
+- [ ] Add further inference backends and media workflows where appropriate.
 
-- [ ] Full support for Windows ARM64 systems.
-- [ ] DGX Station support.
+For proposed changes and bugs, use [ComputeHarbor issues](https://github.com/afantastic1/ComputeHarbor/issues). Contributions should include relevant tests and documentation; please review the existing development rules before editing runtime contracts.
 
-### Engines and integrations
+## Security and deployment
 
-- [x] llama.cpp support.
-- [ ] vLLM support.
-- [ ] EXO support.
-- [ ] ComfyUI integration.
-- [ ] Unsloth support.
-- [ ] Tailscale integration.
+ComputeHarbor is currently **LAN/local-first** software. The unified HTTP gateway binds to **loopback**. Do **not** expose it to the public internet with port forwarding or a raw reverse proxy. A public service would require a separate hardened ingress with authentication, TLS, authorization, tenant isolation, quotas, metering, abuse controls, and operational monitoring.
 
-### Routing and clusters
+Only pair trusted devices, treat model endpoints and cloud credentials as sensitive, and review outbound traffic from external providers or tools. For possible vulnerabilities, avoid public disclosure of exploit details; use GitHub private vulnerability reporting if enabled, or request a private contact channel from the maintainer. The imported [SECURITY.md](SECURITY.md) still includes NVIDIA-specific reporting language and should **not** be treated as ComputeHarbor's security response policy.
 
-- [ ] Route OpenAI-compatible API requests across different inference engines.
-- [ ] Inference request queuing.
-- [ ] Increase number of scheduler variables for better QoS.
-- [ ] A "cluster as a node" view.
-- [ ] KV cache-aware scheduling.
+## Upstream, attribution, and license
 
-### Usability and reliability
+ComputeHarbor is an **independent derivative** of [NVIDIA Personal AI Router](https://github.com/NVIDIA/Personal-AI-Router), with additional code and a separate product direction. **It is not affiliated with, sponsored by, or endorsed by NVIDIA.**
 
-- [ ] Requester-only clients that send work without hosting an inference engine.
-- [ ] Launch PAIR automatically on system startup.
-- [x] Configure engine launch options and environment variables from PAIR.
-- [ ] Stability and reliability improvements informed by real-world use.
+The original project is licensed under [Apache License 2.0](LICENSE). Original copyright and license notices are retained where applicable; see [third-party notices](THIRD_PARTY_NOTICES.md) for other bundled components. Inference engines, model weights, SDKs and cloud services can carry separate licenses or terms. Branding changes do not remove those obligations.
 
-Have a feature request or a workflow you want PAIR to support? Open an
-[issue](https://github.com/NVIDIA/Personal-AI-Router/issues) and tell us how you
-would use it.
-
-## Development Team
-
-NVIDIA team members working on PAIR:
-
-| Name | GitHub | Role |
-| --- | --- | --- |
-| Noah Tervalon (Terve) | [@Noah-Tervalon-Nvidia](https://github.com/Noah-Tervalon-Nvidia) | PAIR Developer - Community Lead |
-| Chris Kelsey | [@ckelseynv](https://github.com/ckelseynv) | PAIR Developer - UI/UX Lead |
-| Sherief Farouk | [@sherief-nv](https://github.com/sherief-nv) | PAIR Developer - Scheduling, Team Lead |
-| Preston Goode | [@nv-pgoode](https://github.com/nv-pgoode) | PAIR Developer - Engine Management Lead |
-| Kaylee Lubick | [@kjlubick](https://github.com/kjlubick) | PAIR Developer - Security Lead |
-| Lucas Brodzinski | [@LB-NV](https://github.com/lb-nv) | PAIR Technical Program Manager |
-| Ambrish Dantrey | [@adantrey](https://github.com/adantrey) | PAIR Engineering Manager |
-| Seth Schneider | [@NV-sschneider](https://github.com/NV-sschneider) | PAIR Product Manager |
-
-## Contributing and governance
-
-- [Contributing](CONTRIBUTING.md)
-- [Code of Conduct](CODE_OF_CONDUCT.md)
-- [Governance](GOVERNANCE.md)
-
-## Support
-
-See [SUPPORT.md](SUPPORT.md) for public support channels and scope.
-
-## Security
-
-PAIR includes local HTTP endpoints, LAN discovery, a PIN-based trust bootstrap,
-and cluster networking. Read [SECURITY.md](SECURITY.md) before deploying it on
-an untrusted or shared network. Do not report vulnerabilities in a public issue.
-
-## License
-
-This project is licensed under the [Apache License 2.0](LICENSE). See
-[Third-Party Software Notices](THIRD_PARTY_NOTICES.md) for bundled dependencies.
-Inference engines, models, and other software used with PAIR may have separate terms.
+NVIDIA and NVIDIA-related names remain the property of their respective owners. References here identify the upstream work and do not imply official support.
