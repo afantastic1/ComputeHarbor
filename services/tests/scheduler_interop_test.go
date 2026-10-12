@@ -189,6 +189,27 @@ func TestSchedulerRanksFreshUnknownAndStaleTelemetry(t *testing.T) {
 	})
 }
 
+func TestSchedulerRanksFreshVRAMPressure(t *testing.T) {
+	stdin, msgs, cleanup := startSchedulerProc(t, "--interval", "1h")
+	t.Cleanup(cleanup)
+
+	waitForMethod(t, msgs, "ready", 10*time.Second)
+	writeRawFrame(t, stdin, `{"jsonrpc":"2.0","method":"scheduler:telemetry","params":{"hostUuid":"idle","gpuUtilizationPercent":10,"vramUtilizationPercent":10,"vramUtilizationKnown":true,"telemetryValid":true,"msSince":0}}`)
+	writeRawFrame(t, stdin, `{"jsonrpc":"2.0","method":"scheduler:telemetry","params":{"hostUuid":"full","gpuUtilizationPercent":10,"vramUtilizationPercent":90,"vramUtilizationKnown":true,"telemetryValid":true,"msSince":0}}`)
+	writeRawFrame(t, stdin, `{"jsonrpc":"2.0","method":"discovery:nodes-changed","params":[{"hostUuid":"full"},{"hostUuid":"idle"}]}`)
+
+	priorities := waitForPriorityPair(t, msgs, 5*time.Second)
+	for _, engine := range []string{"ollama", "lmstudio"} {
+		priority := priorities[engine]
+		assertScheduleOrder(t, engine, priority.Nodes, []string{"idle", "full"})
+		for _, rank := range priority.Ranks {
+			if rank.ID == "full" && (rank.VRAMPressure != schedulerwire.MaxGPUPressure || !rank.VRAMPressureKnown) {
+				t.Fatalf("%s full-node rank = %+v, want known maximum VRAM pressure", engine, rank)
+			}
+		}
+	}
+}
+
 func TestSchedulerRestartBaselineUsesTelemetryReplay(t *testing.T) {
 	stdin, msgs, stopFirst := startSchedulerProc(t, "--interval", "1h")
 	t.Cleanup(stopFirst)

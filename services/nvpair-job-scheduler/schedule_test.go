@@ -213,6 +213,24 @@ func TestRank_CombinesPendingAndGPUPressure(t *testing.T) {
 	}
 }
 
+func TestRank_UsesMaximumKnownGPUOrVRAMPressure(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	m := mgrWith(nopRW{}, []string{"gpu-busy", "vram-busy", "idle"})
+	for _, sample := range []noderec.NodeTelemetry{
+		{HostUUID: "gpu-busy", GPUUtilizationPct: 90, VRAMUtilizationPct: 10, VRAMUtilizationKnown: true, TelemetryValid: true},
+		{HostUUID: "vram-busy", GPUUtilizationPct: 10, VRAMUtilizationPct: 90, VRAMUtilizationKnown: true, TelemetryValid: true},
+		{HostUUID: "idle", GPUUtilizationPct: 10, VRAMUtilizationPct: 10, VRAMUtilizationKnown: true, TelemetryValid: true},
+	} {
+		m.applyTelemetryAt(sample, now)
+	}
+
+	order, ranks := m.rankAt(now)
+	assertStrs(t, order, []string{"idle", "gpu-busy", "vram-busy"})
+	if vramPressureOf(ranks, "vram-busy") != 3 || !knownVRAMPressureOf(ranks, "vram-busy") {
+		t.Fatalf("VRAM pressure snapshot = %+v, want vram-busy at known pressure 3", ranks)
+	}
+}
+
 func TestRank_UnknownAndStaleTelemetryUseNeutralPressure(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	m := mgrWith(nopRW{}, []string{"a", "b", "c"})
@@ -387,6 +405,24 @@ func knownPressureOf(ranks []NodeRank, id string) bool {
 	for _, rank := range ranks {
 		if rank.ID == id {
 			return rank.GPUPressureKnown
+		}
+	}
+	return false
+}
+
+func vramPressureOf(ranks []NodeRank, id string) int {
+	for _, rank := range ranks {
+		if rank.ID == id {
+			return rank.VRAMPressure
+		}
+	}
+	return -1
+}
+
+func knownVRAMPressureOf(ranks []NodeRank, id string) bool {
+	for _, rank := range ranks {
+		if rank.ID == id {
+			return rank.VRAMPressureKnown
 		}
 	}
 	return false
@@ -659,8 +695,8 @@ func TestEmit_IncludesPendingRanks(t *testing.T) {
 		t.Fatalf("priority snapshots = %d, want 1", len(got))
 	}
 	want := []NodeRank{
-		{ID: "a", Pending: 0, GPUPressure: unknownGPUPressure, Rank: 0},
-		{ID: "b", Pending: 1, GPUPressure: unknownGPUPressure, Rank: 1},
+		{ID: "a", Pending: 0, GPUPressure: unknownGPUPressure, VRAMPressure: unknownGPUPressure, Rank: 0},
+		{ID: "b", Pending: 1, GPUPressure: unknownGPUPressure, VRAMPressure: unknownGPUPressure, Rank: 1},
 	}
 	if len(got[0].Ranks) != len(want) {
 		t.Fatalf("ranks = %+v, want %+v", got[0].Ranks, want)

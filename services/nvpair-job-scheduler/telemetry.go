@@ -21,6 +21,10 @@ type gpuTelemetryState struct {
 	ewma         float64
 	pressure     int
 	hasEWMA      bool
+	vramEWMA     float64
+	vramPressure int
+	hasVRAMEWMA  bool
+	vramKnown    bool
 	valid        bool
 	ageAtReceipt time.Duration
 	receivedAt   time.Time
@@ -53,7 +57,8 @@ func (m *Manager) applyTelemetryAt(value noderec.NodeTelemetry, receivedAt time.
 	defer m.mu.Unlock()
 
 	previous, existed := m.telemetry[value.HostUUID]
-	previousPressure := effectiveGPUPressure(previous, existed, receivedAt)
+	previousGPUPressure, previousGPUKnown := gpuPressureSnapshot(previous, existed, receivedAt)
+	previousVRAMPressure, previousVRAMKnown := vramPressureSnapshot(previous, existed, receivedAt)
 	next := previous
 	next.valid = incomingFresh
 	next.ageAtReceipt = ageAtReceipt
@@ -68,23 +73,83 @@ func (m *Manager) applyTelemetryAt(value noderec.NodeTelemetry, receivedAt time.
 			next.pressure = pressureWithHysteresis(next.ewma, previous.pressure)
 		}
 		next.hasEWMA = true
+		if value.VRAMUtilizationKnown {
+			previousVRAMFresh := previousFresh && previous.vramKnown && previous.hasVRAMEWMA
+			if !previousVRAMFresh {
+				next.vramEWMA = float64(value.VRAMUtilizationPct)
+				next.vramPressure = pressureBand(next.vramEWMA)
+			} else {
+				next.vramEWMA = gpuEWMAAlpha*float64(value.VRAMUtilizationPct) + (1-gpuEWMAAlpha)*previous.vramEWMA
+				next.vramPressure = pressureWithHysteresis(next.vramEWMA, previous.vramPressure)
+			}
+			next.hasVRAMEWMA = true
+			next.vramKnown = true
+		} else {
+			next.vramKnown = false
+		}
+	} else {
+		next.vramKnown = false
 	}
 	m.telemetry[value.HostUUID] = next
-	return previousPressure != effectiveGPUPressure(next, true, receivedAt)
+	nextGPUPressure, nextGPUKnown := gpuPressureSnapshot(next, true, receivedAt)
+	nextVRAMPressure, nextVRAMKnown := vramPressureSnapshot(next, true, receivedAt)
+	return previousGPUPressure != nextGPUPressure || previousGPUKnown != nextGPUKnown ||
+		previousVRAMPressure != nextVRAMPressure || previousVRAMKnown != nextVRAMKnown
 }
 
 func (m *Manager) gpuPressureAt(hostUUID string, now time.Time) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	state, ok := m.telemetry[hostUUID]
-	return effectiveGPUPressure(state, ok, now)
+	pressure, _ := gpuPressureSnapshot(state, ok, now)
+	return pressure
 }
 
-func effectiveGPUPressure(state gpuTelemetryState, exists bool, now time.Time) int {
-	if !exists || !telemetryFreshAt(state, now) {
+func (m *Manager) vramPressureAt(hostUUID string, now time.Time) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state, ok := m.telemetry[hostUUID]
+	pressure, _ := vramPressureSnapshot(state, ok, now)
+	return pressure
+}
+
+func (m *Manager) resourcePressureAt(hostUUID string, now time.Time) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state, ok := m.telemetry[hostUUID]
+	gpuPressure, gpuKnown := gpuPressureSnapshot(state, ok, now)
+	vramPressure, vramKnown := vramPressureSnapshot(state, ok, now)
+	return effectiveResourcePressure(gpuPressure, gpuKnown, vramPressure, vramKnown)
+}
+
+func gpuPressureSnapshot(state gpuTelemetryState, exists bool, now time.Time) (int, bool) {
+	known := exists && telemetryFreshAt(state, now)
+	if !known {
+		return unknownGPUPressure, false
+	}
+	return state.pressure, true
+}
+
+func vramPressureSnapshot(state gpuTelemetryState, exists bool, now time.Time) (int, bool) {
+	known := exists && state.vramKnown && state.hasVRAMEWMA && telemetryFreshAt(state, now)
+	if !known {
+		return unknownGPUPressure, false
+	}
+	return state.vramPressure, true
+}
+
+func effectiveResourcePressure(gpuPressure int, gpuKnown bool, vramPressure int, vramKnown bool) int {
+	if !gpuKnown && !vramKnown {
 		return unknownGPUPressure
 	}
-	return state.pressure
+	effective := 0
+	if gpuKnown {
+		effective = gpuPressure
+	}
+	if vramKnown && vramPressure > effective {
+		effective = vramPressure
+	}
+	return effective
 }
 
 func telemetryFreshAt(state gpuTelemetryState, now time.Time) bool {

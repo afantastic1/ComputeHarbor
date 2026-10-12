@@ -100,24 +100,29 @@ func (m *Manager) rankAt(now time.Time) ([]string, []NodeRank) {
 	ranks := make([]NodeRank, 0, len(m.nodes))
 	for id := range m.nodes {
 		state, ok := m.telemetry[id]
-		pressureKnown := telemetryFreshAt(state, now)
+		gpuPressure, gpuKnown := gpuPressureSnapshot(state, ok, now)
+		vramPressure, vramKnown := vramPressureSnapshot(state, ok, now)
 		ranks = append(ranks, NodeRank{
-			ID:               id,
-			Pending:          pending[id],
-			GPUPressure:      effectiveGPUPressure(state, ok, now),
-			GPUPressureKnown: pressureKnown,
+			ID:                id,
+			Pending:           pending[id],
+			GPUPressure:       gpuPressure,
+			GPUPressureKnown:  gpuKnown,
+			VRAMPressure:      vramPressure,
+			VRAMPressureKnown: vramKnown,
 		})
 	}
 	m.mu.Unlock()
 
 	sort.Slice(ranks, func(i, j int) bool {
-		leftLoad := ranks[i].Pending + ranks[i].GPUPressure
-		rightLoad := ranks[j].Pending + ranks[j].GPUPressure
+		leftPressure := effectiveResourcePressure(ranks[i].GPUPressure, ranks[i].GPUPressureKnown, ranks[i].VRAMPressure, ranks[i].VRAMPressureKnown)
+		rightPressure := effectiveResourcePressure(ranks[j].GPUPressure, ranks[j].GPUPressureKnown, ranks[j].VRAMPressure, ranks[j].VRAMPressureKnown)
+		leftLoad := ranks[i].Pending + leftPressure
+		rightLoad := ranks[j].Pending + rightPressure
 		if leftLoad != rightLoad {
 			return leftLoad < rightLoad
 		}
-		if ranks[i].GPUPressure != ranks[j].GPUPressure {
-			return ranks[i].GPUPressure < ranks[j].GPUPressure
+		if leftPressure != rightPressure {
+			return leftPressure < rightPressure
 		}
 		return ranks[i].ID < ranks[j].ID
 	})

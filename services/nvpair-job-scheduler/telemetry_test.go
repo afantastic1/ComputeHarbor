@@ -95,6 +95,39 @@ func TestApplyTelemetrySmoothsUtilizationBeforeChangingPressure(t *testing.T) {
 	}
 }
 
+func TestApplyTelemetryTracksVRAMPressureIndependently(t *testing.T) {
+	manager := NewManager(NewCodec(nopRW{}), time.Second)
+	now := time.Unix(1_700_000_000, 0)
+	sample := noderec.NodeTelemetry{
+		HostUUID:             "node-a",
+		GPUUtilizationPct:    20,
+		VRAMUtilizationPct:   85,
+		VRAMUtilizationKnown: true,
+		TelemetryValid:       true,
+	}
+
+	if !manager.applyTelemetryAt(sample, now) {
+		t.Fatal("first VRAM-saturated sample should change effective telemetry")
+	}
+	if got := manager.gpuPressureAt("node-a", now); got != 0 {
+		t.Fatalf("GPU pressure = %d, want 0", got)
+	}
+	if got := manager.vramPressureAt("node-a", now); got != 3 {
+		t.Fatalf("VRAM pressure = %d, want 3", got)
+	}
+	if got := manager.resourcePressureAt("node-a", now); got != 3 {
+		t.Fatalf("resource pressure = %d, want 3", got)
+	}
+
+	sample.VRAMUtilizationKnown = false
+	if !manager.applyTelemetryAt(sample, now.Add(time.Second)) {
+		t.Fatal("losing VRAM validity should change effective telemetry")
+	}
+	if got := manager.vramPressureAt("node-a", now.Add(time.Second)); got != unknownGPUPressure {
+		t.Fatalf("unknown VRAM pressure = %d, want neutral %d", got, unknownGPUPressure)
+	}
+}
+
 func TestTelemetryFreshnessUnknownAndRecovery(t *testing.T) {
 	manager := NewManager(NewCodec(nopRW{}), time.Second)
 	now := time.Unix(1_700_000_000, 0)
@@ -228,12 +261,12 @@ func TestTelemetryNotificationEmitsOnlyOnPressureChange(t *testing.T) {
 
 	for _, engine := range schedulerEngines {
 		got := recorder.priorities(engine)
-		if len(got) != 2 {
-			t.Fatalf("%s emissions = %d, want discovery plus one pressure change", engine, len(got))
+		if len(got) != 3 {
+			t.Fatalf("%s emissions = %d, want discovery plus freshness and pressure changes", engine, len(got))
 		}
-		assertStrs(t, got[1].Nodes, []string{"b", "a"})
-		if pressureOf(got[1].Ranks, "b") != 0 || pressureOf(got[1].Ranks, "a") != 1 {
-			t.Fatalf("%s pressure snapshot = %+v", engine, got[1].Ranks)
+		assertStrs(t, got[2].Nodes, []string{"b", "a"})
+		if pressureOf(got[2].Ranks, "b") != 0 || pressureOf(got[2].Ranks, "a") != 1 {
+			t.Fatalf("%s pressure snapshot = %+v", engine, got[2].Ranks)
 		}
 	}
 }

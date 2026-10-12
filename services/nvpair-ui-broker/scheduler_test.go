@@ -335,7 +335,7 @@ func TestSchedulePriorityPreservesOptionalFreshnessThroughBrokerForwarding(t *te
 		payload string
 	}{
 		{name: "old scheduler", payload: `{"engine":"ollama","nodes":["pc-a"],"ranks":[{"id":"pc-a","pending":2,"gpuPressure":1,"rank":0}]}`},
-		{name: "new scheduler", known: true, payload: `{"engine":"ollama","nodes":["pc-a"],"ranks":[{"id":"pc-a","pending":2,"gpuPressure":1,"gpuPressureKnown":true,"rank":0}]}`},
+		{name: "new scheduler", known: true, payload: `{"engine":"ollama","nodes":["pc-a"],"ranks":[{"id":"pc-a","pending":2,"gpuPressure":1,"gpuPressureKnown":true,"vramPressure":3,"vramPressureKnown":true,"rank":0}]}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			brokerSide, proxySide := net.Pipe()
@@ -363,6 +363,9 @@ func TestSchedulePriorityPreservesOptionalFreshnessThroughBrokerForwarding(t *te
 			}
 			if len(got.Ranks) != 1 || got.Ranks[0].ID != "pc-a" || got.Ranks[0].Pending != 2 || got.Ranks[0].GPUPressure != 1 || got.Ranks[0].GPUPressureKnown != test.known {
 				t.Fatalf("forwarded rank = %+v, want freshness known=%v with pressure=1", got.Ranks, test.known)
+			}
+			if got.Ranks[0].VRAMPressureKnown != test.known || test.known && got.Ranks[0].VRAMPressure != 3 {
+				t.Fatalf("forwarded VRAM pressure = %+v, want known=%v and pressure 3 when known", got.Ranks[0], test.known)
 			}
 			if got.Generation == 0 {
 				t.Fatal("forwarded priority has no generation")
