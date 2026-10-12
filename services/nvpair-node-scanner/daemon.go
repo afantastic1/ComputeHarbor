@@ -1641,11 +1641,14 @@ func (d *daemon) refreshNodeTelemetryCandidates(ctx context.Context, hostUUID st
 			utilization = info.GPUs[i].UtilizationPercent
 		}
 	}
+	vramUtilization, vramKnown := noderec.MaxVRAMUtilization(info.GPUs)
 	d.emitTelemetry(noderec.NodeTelemetry{
-		HostUUID:          hostUUID,
-		GPUUtilizationPct: utilization,
-		TelemetryValid:    info.TelemetryValid,
-		MSSince:           age,
+		HostUUID:             hostUUID,
+		GPUUtilizationPct:    utilization,
+		VRAMUtilizationPct:   vramUtilization,
+		VRAMUtilizationKnown: vramKnown,
+		TelemetryValid:       info.TelemetryValid,
+		MSSince:              age,
 	})
 	return true
 }

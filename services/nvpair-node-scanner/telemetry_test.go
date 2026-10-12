@@ -22,8 +22,9 @@ import (
 func TestRefreshNodeTelemetryEmitsFreshnessAndUtilization(t *testing.T) {
 	response := NodeInfoResponse{
 		GPUs: []GPUInfo{
-			{Name: "GPU 0", UtilizationPercent: 0},
-			{Name: "GPU 1", UtilizationPercent: 84},
+			{Name: "GPU 0", VramBytes: 10 << 30, VramUsedBytes: 4 << 30, VramUsedValid: true},
+			{Name: "GPU 1", VramBytes: 8 << 30, VramUsedBytes: 7 << 30, VramUsedValid: true, UtilizationPercent: 84},
+			{Name: "GPU 2", VramBytes: 1, VramUsedBytes: ^uint64(0)},
 		},
 		TelemetryValid: true,
 		MSSince:        137,
@@ -64,6 +65,9 @@ func TestRefreshNodeTelemetryEmitsFreshnessAndUtilization(t *testing.T) {
 	}
 	if got.GPUUtilizationPct != 84 {
 		t.Fatalf("GPU utilization = %d, want max 84", got.GPUUtilizationPct)
+	}
+	if got.VRAMUtilizationPct != 87 || !got.VRAMUtilizationKnown {
+		t.Fatalf("VRAM utilization = %d known=%v, want 87 known", got.VRAMUtilizationPct, got.VRAMUtilizationKnown)
 	}
 	if got.MSSince < 137 || got.MSSince >= 3_500 {
 		t.Fatalf("age = %d, want node age plus bounded fetch time", got.MSSince)

@@ -280,11 +280,17 @@ func TestBuildResponseMerge(t *testing.T) {
 	if got := typed.GPUs[0].VramUsedBytes; got != 4<<30 {
 		t.Errorf("gpu 0 VramUsedBytes = %d, want %d", got, 4<<30)
 	}
+	if !typed.GPUs[0].VramUsedValid {
+		t.Error("gpu 0 VRAM usage should be valid for a matched dynamic row")
+	}
 	if got := typed.GPUs[0].UtilizationPercent; got != 27 {
 		t.Errorf("gpu 0 UtilizationPercent = %d, want 27", got)
 	}
 	if got := typed.GPUs[1].VramUsedBytes; got != 0 {
 		t.Errorf("gpu 1 VramUsedBytes = %d, want 0 (unmatched LUID)", got)
+	}
+	if typed.GPUs[1].VramUsedValid {
+		t.Error("gpu 1 VRAM usage should be unknown for an unmatched dynamic row")
 	}
 	if got := typed.GPUs[1].UtilizationPercent; got != 0 {
 		t.Errorf("gpu 1 UtilizationPercent = %d, want 0 (unmatched LUID)", got)
@@ -329,6 +335,9 @@ func TestBuildResponseUnifiedMemoryUsesSystemSnapshot(t *testing.T) {
 			if got := typed.GPUs[0].VramUsedBytes; got != sysMemUsed {
 				t.Errorf("VramUsedBytes = %d, want system memory %d", got, sysMemUsed)
 			}
+			if !typed.GPUs[0].VramUsedValid {
+				t.Error("unified-memory VRAM usage should be valid when system memory is available")
+			}
 			if got := typed.GPUs[0].UtilizationPercent; got != c.wantUtil {
 				t.Errorf("UtilizationPercent = %d, want %d", got, c.wantUtil)
 			}
@@ -345,6 +354,28 @@ func TestBuildResponseUnifiedMemoryUsesSystemSnapshot(t *testing.T) {
 				t.Errorf("vram_used_bytes should be present for unified memory: %v", obj)
 			}
 		})
+	}
+}
+
+func TestBuildResponseMarksZeroUsedVRAMAsValidWhenSampled(t *testing.T) {
+	static := []GPUInfo{{Name: "GPU 0", VramBytes: 8 << 30, statsKey: "gpu-a"}}
+	typed, raw := buildResponseDecode(t, static, nil, 0, statsSnapshot{
+		GPU: map[string]gpuStat{"gpu-a": {}},
+	})
+
+	if !typed.GPUs[0].VramUsedValid {
+		t.Fatal("sampled zero VRAM usage should remain distinguishable from a missing sample")
+	}
+	gpus, ok := raw["GPUs"].([]any)
+	if !ok || len(gpus) != 1 {
+		t.Fatalf("unexpected GPUs payload: %v", raw["GPUs"])
+	}
+	object, ok := gpus[0].(map[string]any)
+	if !ok {
+		t.Fatalf("gpu 0 not an object: %T", gpus[0])
+	}
+	if got, ok := object["vram_used_valid"].(bool); !ok || !got {
+		t.Fatalf("vram_used_valid = %v, want true", object["vram_used_valid"])
 	}
 }
 
@@ -416,6 +447,9 @@ func TestBuildResponseOmitsZero(t *testing.T) {
 	}
 	if _, present := obj["vram_used_bytes"]; present {
 		t.Errorf("vram_used_bytes should be absent when unknown, got: %v", obj)
+	}
+	if _, present := obj["vram_used_valid"]; present {
+		t.Errorf("vram_used_valid should be absent when unknown, got: %v", obj)
 	}
 	if _, present := obj["utilization_percent"]; present {
 		t.Errorf("utilization_percent should be absent when unknown, got: %v", obj)

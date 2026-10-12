@@ -435,7 +435,29 @@ type GPUInfo struct {
 	Name               string `json:"name"`
 	VramBytes          uint64 `json:"vram_bytes,omitempty"`
 	VramUsedBytes      uint64 `json:"vram_used_bytes,omitempty"`
+	VramUsedValid      bool   `json:"vram_used_valid,omitempty"`
 	UtilizationPercent uint32 `json:"utilization_percent,omitempty"`
+}
+
+// MaxVRAMUtilization returns the highest known used-to-total VRAM percentage.
+// Division happens before scaling so very large byte counters cannot overflow.
+func MaxVRAMUtilization(gpus []GPUInfo) (uint32, bool) {
+	var maximum uint32
+	known := false
+	for _, gpu := range gpus {
+		if !gpu.VramUsedValid || gpu.VramBytes == 0 {
+			continue
+		}
+		known = true
+		utilization := uint32(100)
+		if gpu.VramUsedBytes < gpu.VramBytes {
+			utilization = uint32(float64(gpu.VramUsedBytes) / float64(gpu.VramBytes) * 100)
+		}
+		if utilization > maximum {
+			maximum = utilization
+		}
+	}
+	return maximum, known
 }
 
 type CPUInfo struct {
@@ -616,12 +638,14 @@ type NodeEvent struct {
 	Node DirectoryNode `json:"node"`
 }
 
-// NodeTelemetry is a fresh GPU-utilization observation for one node. The
+// NodeTelemetry is a fresh GPU and VRAM utilization observation for one node. The
 // scanner emits it independently of directory changes so scheduling telemetry
 // stays current even when discovery identity and inventory are stable.
 type NodeTelemetry struct {
-	HostUUID          string `json:"hostUuid"`
-	GPUUtilizationPct uint32 `json:"gpuUtilizationPercent"`
-	TelemetryValid    bool   `json:"telemetryValid"`
-	MSSince           int64  `json:"msSince"`
+	HostUUID             string `json:"hostUuid"`
+	GPUUtilizationPct    uint32 `json:"gpuUtilizationPercent"`
+	VRAMUtilizationPct   uint32 `json:"vramUtilizationPercent"`
+	VRAMUtilizationKnown bool   `json:"vramUtilizationKnown"`
+	TelemetryValid       bool   `json:"telemetryValid"`
+	MSSince              int64  `json:"msSince"`
 }

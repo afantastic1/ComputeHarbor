@@ -31,6 +31,7 @@ type GPUInfo struct {
 	Name               string `json:"name"`
 	VramBytes          uint64 `json:"vram_bytes,omitempty"`
 	VramUsedBytes      uint64 `json:"vram_used_bytes,omitempty"`
+	VramUsedValid      bool   `json:"vram_used_valid,omitempty"`
 	UtilizationPercent uint32 `json:"utilization_percent,omitempty"`
 
 	// statsKey is the opaque per-adapter identifier used to join this
@@ -179,10 +180,12 @@ func buildResponseAt(gpus []GPUInfo, cpuStatic *CPUInfo, memTotal uint64, snap s
 		gpu := &outGPUs[i]
 		if gpu.usesSystemMemoryUsage {
 			gpu.VramUsedBytes = snap.MemUsedBytes
+			gpu.VramUsedValid = gpu.VramBytes > 0
 		}
 		if s, ok := snap.GPU[gpu.statsKey]; ok {
 			if !gpu.usesSystemMemoryUsage {
 				gpu.VramUsedBytes = s.VRAMUsed
+				gpu.VramUsedValid = gpu.VramBytes > 0
 			}
 			gpu.UtilizationPercent = s.UtilizationPct
 		}

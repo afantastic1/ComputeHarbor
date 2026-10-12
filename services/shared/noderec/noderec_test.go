@@ -254,6 +254,42 @@ func TestDirectoryNodeJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMaxVRAMUtilizationUsesHighestValidGPU(t *testing.T) {
+	tests := []struct {
+		name      string
+		gpus      []GPUInfo
+		want      uint32
+		wantKnown bool
+	}{
+		{
+			name: "highest valid ratio",
+			gpus: []GPUInfo{
+				{Name: "unknown", VramBytes: 8 << 30, VramUsedBytes: 8 << 30},
+				{Name: "lower", VramBytes: 10 << 30, VramUsedBytes: 4 << 30, VramUsedValid: true},
+				{Name: "higher", VramBytes: 8 << 30, VramUsedBytes: 7 << 30, VramUsedValid: true},
+			},
+			want: 87, wantKnown: true,
+		},
+		{
+			name: "zero total is ignored",
+			gpus: []GPUInfo{{Name: "invalid total", VramUsedBytes: 1, VramUsedValid: true}},
+		},
+		{
+			name: "used above total clamps without overflow",
+			gpus: []GPUInfo{{Name: "overflow", VramBytes: 1, VramUsedBytes: ^uint64(0), VramUsedValid: true}},
+			want: 100, wantKnown: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, known := MaxVRAMUtilization(test.gpus)
+			if got != test.want || known != test.wantKnown {
+				t.Fatalf("MaxVRAMUtilization() = (%d, %v), want (%d, %v)", got, known, test.want, test.wantKnown)
+			}
+		})
+	}
+}
+
 func TestValidateTXTSize(t *testing.T) {
 	if err := ValidateTXTSize([]string{"v=1", "ni=14318"}); err != nil {
 		t.Errorf("small TXT flagged: %v", err)
