@@ -47,6 +47,8 @@ type RuntimeModel struct {
 	InFlightReservations   int
 	GPUPressure            int
 	GPUPressureKnown       bool
+	VRAMPressure           int
+	VRAMPressureKnown      bool
 }
 
 type Requirements struct {
@@ -143,7 +145,7 @@ func scoreCandidate(policy string, candidate RuntimeModel) float64 {
 		pressure = 1 - clamp(candidate.MemoryPressure)
 	}
 	pending := unknownSignalScore
-	gpuPressure := unknownSignalScore
+	resourcePressure := unknownSignalScore
 	if candidate.PendingKnown || candidate.InFlightReservations > 0 {
 		pendingCount := max(candidate.InFlightReservations, 0)
 		if candidate.PendingKnown {
@@ -151,8 +153,9 @@ func scoreCandidate(policy string, candidate RuntimeModel) float64 {
 		}
 		pending = 1 / (1 + float64(pendingCount))
 	}
-	if candidate.GPUPressureKnown {
-		gpuPressure = 1 - clamp(float64(candidate.GPUPressure)/3)
+	effectivePressure, pressureKnown := highestKnownPressure(candidate)
+	if pressureKnown {
+		resourcePressure = 1 - clamp(float64(effectivePressure)/3)
 	}
 	network := unknownSignalScore
 	if candidate.NetworkCost > 0 {
@@ -162,16 +165,30 @@ func scoreCandidate(policy string, candidate RuntimeModel) float64 {
 	switch policy {
 	case AutoFastAlias:
 		return fastWeights.loaded*loaded + fastWeights.latency*latency + fastWeights.throughput*throughput + fastWeights.size*size +
-			fastWeights.pending*pending + fastWeights.gpuPressure*gpuPressure
+			fastWeights.pending*pending + fastWeights.gpuPressure*resourcePressure
 	case AutoBestAlias:
 		capability := float64(capabilityCount(effectiveCapabilities(candidate))) / 4
 		return bestWeights.quality*quality + bestWeights.context*contextScore(candidate.Model.ContextLength) + bestWeights.capability*capability +
-			bestWeights.pending*pending + bestWeights.gpuPressure*gpuPressure
+			bestWeights.pending*pending + bestWeights.gpuPressure*resourcePressure
 	default:
 		return balancedWeights.quality*quality + balancedWeights.latency*latency + balancedWeights.loaded*loaded +
 			balancedWeights.network*network + balancedWeights.pressure*pressure + balancedWeights.pending*pending +
-			balancedWeights.gpuPressure*gpuPressure
+			balancedWeights.gpuPressure*resourcePressure
 	}
+}
+
+func highestKnownPressure(candidate RuntimeModel) (int, bool) {
+	pressure := 0
+	known := false
+	if candidate.GPUPressureKnown {
+		pressure = candidate.GPUPressure
+		known = true
+	}
+	if candidate.VRAMPressureKnown && (!known || candidate.VRAMPressure > pressure) {
+		pressure = candidate.VRAMPressure
+		known = true
+	}
+	return pressure, known
 }
 
 func effectiveCapabilities(candidate RuntimeModel) map[string]bool {

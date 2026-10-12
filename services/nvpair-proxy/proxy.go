@@ -407,12 +407,14 @@ type Proxy struct {
 	// reads priority to form the failover list; reserveCandidate atomically adds
 	// local dispatches before forwarding so a concurrent burst cannot repeatedly
 	// choose from the same stale scheduler state.
-	priorityMu               sync.RWMutex
-	priority                 []string
-	priorityPending          map[string]int
-	priorityGPUPressure      map[string]int
-	priorityGPUPressureKnown map[string]bool
-	priorityReservations     map[string]int
+	priorityMu                sync.RWMutex
+	priority                  []string
+	priorityPending           map[string]int
+	priorityGPUPressure       map[string]int
+	priorityGPUPressureKnown  map[string]bool
+	priorityVRAMPressure      map[string]int
+	priorityVRAMPressureKnown map[string]bool
+	priorityReservations      map[string]int
 	// schedulerUnavailable gates resource inputs to Gateway model scoring only.
 	schedulerUnavailable bool
 
@@ -2219,7 +2221,7 @@ func (p *Proxy) reserveCandidate(f *facade, candidates []candidate) ([]candidate
 			continue
 		}
 		load := uint64(p.priorityPending[id]) +
-			uint64(p.priorityGPUPressure[id]) +
+			uint64(max(p.priorityGPUPressure[id], p.priorityVRAMPressure[id])) +
 			uint64(p.priorityReservations[id])
 		if bestIndex < 0 || load < bestLoad || (load == bestLoad && order < bestOrder) {
 			bestIndex = index
@@ -2510,11 +2512,13 @@ func (p *Proxy) PriorityList() []string {
 }
 
 type priorityNodeSnapshot struct {
-	pending          int
-	pendingKnown     bool
-	gpuPressure      int
-	gpuPressureKnown bool
-	reservations     int
+	pending           int
+	pendingKnown      bool
+	gpuPressure       int
+	gpuPressureKnown  bool
+	vramPressure      int
+	vramPressureKnown bool
+	reservations      int
 }
 
 type priorityStateSnapshot struct {
@@ -2539,6 +2543,12 @@ func (p *Proxy) prioritySnapshot() priorityStateSnapshot {
 		node := nodes[id]
 		node.gpuPressure = pressure
 		node.gpuPressureKnown = p.priorityGPUPressureKnown[id]
+		nodes[id] = node
+	}
+	for id, pressure := range p.priorityVRAMPressure {
+		node := nodes[id]
+		node.vramPressure = pressure
+		node.vramPressureKnown = p.priorityVRAMPressureKnown[id]
 		nodes[id] = node
 	}
 	for id, reservations := range p.priorityReservations {
@@ -2609,6 +2619,8 @@ func (p *Proxy) setPriorityLocked(priority schedulerwire.Priority) int {
 	pending := make(map[string]int, len(priority.Ranks))
 	gpuPressure := make(map[string]int, len(priority.Ranks))
 	gpuPressureKnown := make(map[string]bool, len(priority.Ranks))
+	vramPressure := make(map[string]int, len(priority.Ranks))
+	vramPressureKnown := make(map[string]bool, len(priority.Ranks))
 	for _, rank := range priority.Ranks {
 		if rank.ID == "" {
 			continue
@@ -2624,6 +2636,13 @@ func (p *Proxy) setPriorityLocked(priority schedulerwire.Priority) int {
 		pending[rank.ID] = rank.Pending
 		gpuPressure[rank.ID] = rank.GPUPressure
 		gpuPressureKnown[rank.ID] = rank.GPUPressureKnown
+		if rank.VRAMPressure < 0 {
+			rank.VRAMPressure = 0
+		} else if rank.VRAMPressure > schedulerwire.MaxGPUPressure {
+			rank.VRAMPressure = schedulerwire.MaxGPUPressure
+		}
+		vramPressure[rank.ID] = rank.VRAMPressure
+		vramPressureKnown[rank.ID] = rank.VRAMPressureKnown
 	}
 
 	// Unconditional, with no escape hatch for an unversioned snapshot. One used
@@ -2642,6 +2661,8 @@ func (p *Proxy) setPriorityLocked(priority schedulerwire.Priority) int {
 	p.priorityPending = pending
 	p.priorityGPUPressure = gpuPressure
 	p.priorityGPUPressureKnown = gpuPressureKnown
+	p.priorityVRAMPressure = vramPressure
+	p.priorityVRAMPressureKnown = vramPressureKnown
 	p.priorityReservations = make(map[string]int)
 	return len(cleaned)
 }

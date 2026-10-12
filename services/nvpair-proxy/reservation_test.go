@@ -30,7 +30,11 @@ func TestPrioritySnapshotReturnsDetachedResourceMap(t *testing.T) {
 	proxy := NewProxy(nil)
 	applySnapshot(proxy, schedulerwire.Priority{
 		Nodes: []string{"node-a"},
-		Ranks: []schedulerwire.NodeRank{{ID: "node-a", Pending: 2, GPUPressure: 1, GPUPressureKnown: true}},
+		Ranks: []schedulerwire.NodeRank{{
+			ID: "node-a", Pending: 2,
+			GPUPressure: 1, GPUPressureKnown: true,
+			VRAMPressure: 3, VRAMPressureKnown: true,
+		}},
 	})
 
 	snapshot := proxy.prioritySnapshot()
@@ -38,7 +42,8 @@ func TestPrioritySnapshotReturnsDetachedResourceMap(t *testing.T) {
 	proxy.priorityMu.Lock()
 	proxy.priorityReservations["node-a"] = 4
 	proxy.priorityMu.Unlock()
-	if got := proxy.prioritySnapshot().nodes["node-a"]; got.pending != 2 || got.gpuPressure != 1 || !got.gpuPressureKnown || got.reservations != 4 {
+	if got := proxy.prioritySnapshot().nodes["node-a"]; got.pending != 2 || got.gpuPressure != 1 || !got.gpuPressureKnown ||
+		got.vramPressure != 3 || !got.vramPressureKnown || got.reservations != 4 {
 		t.Fatalf("mutating returned snapshot changed Proxy state: %+v", got)
 	}
 }
@@ -190,6 +195,21 @@ func TestReserveCandidate_CombinesPendingPressureAndReservations(t *testing.T) {
 	}
 }
 
+func TestReserveCandidateUsesMaximumResourcePressure(t *testing.T) {
+	p := prProxy(t)
+	applySnapshot(p, schedulerwire.Priority{
+		Nodes: []string{"a", "b"},
+		Ranks: []schedulerwire.NodeRank{
+			{ID: "a", GPUPressure: 2, VRAMPressure: 2},
+			{ID: "b", GPUPressure: 3, VRAMPressure: 0},
+		},
+	})
+
+	if got := reservedID(p, reservationCandidates("a", "b")); got != "a" {
+		t.Fatalf("resource-aware reservation chose %q, want a using max(GPU, VRAM)", got)
+	}
+}
+
 func TestSetPrioritySnapshotClampsGPUPressure(t *testing.T) {
 	p := prProxy(t)
 	applySnapshot(p, schedulerwire.Priority{
@@ -205,6 +225,24 @@ func TestSetPrioritySnapshotClampsGPUPressure(t *testing.T) {
 	p.priorityMu.RUnlock()
 	if low != 0 || high != schedulerwire.MaxGPUPressure {
 		t.Fatalf("clamped GPU pressure = low:%d high:%d", low, high)
+	}
+}
+
+func TestSetPrioritySnapshotClampsVRAMPressure(t *testing.T) {
+	p := prProxy(t)
+	applySnapshot(p, schedulerwire.Priority{
+		Nodes: []string{"low", "high"},
+		Ranks: []schedulerwire.NodeRank{
+			{ID: "low", VRAMPressure: -1},
+			{ID: "high", VRAMPressure: schedulerwire.MaxGPUPressure + 1},
+		},
+	})
+	p.priorityMu.RLock()
+	low := p.priorityVRAMPressure["low"]
+	high := p.priorityVRAMPressure["high"]
+	p.priorityMu.RUnlock()
+	if low != 0 || high != schedulerwire.MaxGPUPressure {
+		t.Fatalf("clamped VRAM pressure = low:%d high:%d", low, high)
 	}
 }
 

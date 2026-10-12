@@ -441,13 +441,14 @@ func classifyLocalCapacity(
 	allBusy := true
 	unknown := false
 	for _, candidate := range compatible {
-		if !candidate.GPUPressureKnown {
-			allBusy = false
-			unknown = true
+		gpuSaturated := candidate.GPUPressureKnown && candidate.GPUPressure >= schedulerwire.MaxGPUPressure
+		vramSaturated := candidate.VRAMPressureKnown && candidate.VRAMPressure >= schedulerwire.MaxGPUPressure
+		if gpuSaturated || vramSaturated {
 			continue
 		}
-		if candidate.GPUPressure < schedulerwire.MaxGPUPressure {
-			allBusy = false
+		allBusy = false
+		if !candidate.GPUPressureKnown || !candidate.VRAMPressureKnown {
+			unknown = true
 		}
 	}
 	if allBusy {

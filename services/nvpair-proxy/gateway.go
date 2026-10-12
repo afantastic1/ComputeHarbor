@@ -95,6 +95,8 @@ func (p *Proxy) gatewayInventory() []modelselection.RuntimeModel {
 					candidate.PendingKnown = resource.pendingKnown
 					candidate.GPUPressure = resource.gpuPressure
 					candidate.GPUPressureKnown = resource.gpuPressureKnown
+					candidate.VRAMPressure = resource.vramPressure
+					candidate.VRAMPressureKnown = resource.vramPressureKnown
 					candidate.InFlightReservations = resource.reservations
 				}
 				candidates[key] = candidate

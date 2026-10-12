@@ -163,8 +163,8 @@ func TestGatewayInventoryRetainsEveryModelDeploymentAndFreshNodeResources(t *tes
 		Generation: 1,
 		Nodes:      []string{"pc-b", "pc-a"},
 		Ranks: []schedulerwire.NodeRank{
-			{ID: "pc-a", Pending: 2, GPUPressure: 3, GPUPressureKnown: true},
-			{ID: "pc-b", Pending: 0, GPUPressure: 0, GPUPressureKnown: true},
+			{ID: "pc-a", Pending: 2, GPUPressure: 3, GPUPressureKnown: true, VRAMPressure: 2, VRAMPressureKnown: true},
+			{ID: "pc-b", Pending: 0, GPUPressure: 0, GPUPressureKnown: true, VRAMPressure: 0, VRAMPressureKnown: true},
 		},
 	})
 
@@ -177,10 +177,12 @@ func TestGatewayInventoryRetainsEveryModelDeploymentAndFreshNodeResources(t *tes
 		byNode[candidate.NodeID] = candidate
 	}
 	if byNode["pc-a"].PendingRequests != 2 || !byNode["pc-a"].PendingKnown || byNode["pc-a"].GPUPressure != 3 || !byNode["pc-a"].GPUPressureKnown ||
+		byNode["pc-a"].VRAMPressure != 2 || !byNode["pc-a"].VRAMPressureKnown ||
 		byNode["pc-a"].MemoryPressure != 0 || byNode["pc-a"].AvailableMemoryBytes != 0 {
-		t.Errorf("pc-a resource signals = %+v, want pending=2 GPU pressure=3 and unknown memory", byNode["pc-a"])
+		t.Errorf("pc-a resource signals = %+v, want pending=2 GPU pressure=3 VRAM pressure=2 and unknown memory", byNode["pc-a"])
 	}
-	if byNode["pc-b"].PendingRequests != 0 || !byNode["pc-b"].PendingKnown || byNode["pc-b"].GPUPressure != 0 || !byNode["pc-b"].GPUPressureKnown {
+	if byNode["pc-b"].PendingRequests != 0 || !byNode["pc-b"].PendingKnown || byNode["pc-b"].GPUPressure != 0 || !byNode["pc-b"].GPUPressureKnown ||
+		byNode["pc-b"].VRAMPressure != 0 || !byNode["pc-b"].VRAMPressureKnown {
 		t.Errorf("pc-b resource signals = %+v, want known idle values", byNode["pc-b"])
 	}
 }
@@ -861,6 +863,23 @@ func TestPreferLocalAutoUsesCloudOnlyForNoCapacityOrEntirelyBusyLocalInventory(t
 			allowPaidFallback: true, wantCloud: true,
 		},
 		{
+			name:        "VRAM saturation uses cloud with low GPU pressure",
+			deployments: []string{"pc-a"},
+			ranks: []schedulerwire.NodeRank{{
+				ID: "pc-a", GPUPressure: 0, GPUPressureKnown: true,
+				VRAMPressure: schedulerwire.MaxGPUPressure, VRAMPressureKnown: true,
+			}},
+			allowPaidFallback: true, wantCloud: true,
+		},
+		{
+			name:        "VRAM saturation uses cloud with unknown GPU pressure",
+			deployments: []string{"pc-a"},
+			ranks: []schedulerwire.NodeRank{{
+				ID: "pc-a", VRAMPressure: schedulerwire.MaxGPUPressure, VRAMPressureKnown: true,
+			}},
+			allowPaidFallback: true, wantCloud: true,
+		},
+		{
 			name:              "unknown telemetry keeps the request local",
 			deployments:       []string{"pc-a"},
 			ranks:             []schedulerwire.NodeRank{{ID: "pc-a", GPUPressure: schedulerwire.MaxGPUPressure, GPUPressureKnown: false}},
@@ -873,11 +892,17 @@ func TestPreferLocalAutoUsesCloudOnlyForNoCapacityOrEntirelyBusyLocalInventory(t
 			allowPaidFallback: true, reserveOnNode: true,
 		},
 		{
+			name:              "low GPU pressure with unknown VRAM keeps the request local",
+			deployments:       []string{"pc-a"},
+			ranks:             []schedulerwire.NodeRank{{ID: "pc-a", GPUPressure: 0, GPUPressureKnown: true}},
+			allowPaidFallback: true,
+		},
+		{
 			name:        "one idle deployment keeps the request local",
 			deployments: []string{"pc-a", "pc-b"},
 			ranks: []schedulerwire.NodeRank{
 				{ID: "pc-a", GPUPressure: schedulerwire.MaxGPUPressure, GPUPressureKnown: true},
-				{ID: "pc-b", GPUPressure: 0, GPUPressureKnown: true},
+				{ID: "pc-b", GPUPressure: 0, GPUPressureKnown: true, VRAMPressure: 0, VRAMPressureKnown: true},
 			},
 			allowPaidFallback: true,
 		},

@@ -181,6 +181,23 @@ func TestAutoFastUsesFreshResourcesToChooseAmongModelDeployments(t *testing.T) {
 	}
 }
 
+func TestAutoFastUsesHighestKnownGPUOrVRAMPressure(t *testing.T) {
+	busy := runtimeModel("same-model", "ollama", 8_000_000_000, true, 300, 30, nil)
+	busy.NodeID = "pc-a"
+	busy.GPUPressure = 0
+	busy.GPUPressureKnown = true
+	busy.VRAMPressure = 3
+	busy.VRAMPressureKnown = true
+	idle := busy
+	idle.NodeID = "pc-b"
+	idle.VRAMPressure = 0
+
+	selection := (AutoModelSelector{}).Select(AutoFastAlias, Requirements{}, []RuntimeModel{busy, idle})
+	if selection == nil || selection.NodeID != "pc-b" {
+		t.Fatalf("selection = %+v, want same model's VRAM-idle pc-b deployment", selection)
+	}
+}
+
 func TestAutoBalancedAccountsForCurrentProxyReservations(t *testing.T) {
 	reserved := runtimeModel("model-8b", "ollama", 8_000_000_000, true, 300, 30, nil)
 	reserved.NodeID = "pc-a"
