@@ -110,7 +110,7 @@ function TrayNodeRow({ node, activeWorkloads }: { node: NodeItem; activeWorkload
                             <span
                                 className="inline-block w-1.5 h-1.5 rounded-full"
                                 style={{
-                                    backgroundColor: singleEngineRunning ? '#76b900' : '#666'
+                                    backgroundColor: singleEngineRunning ? '#25D0B1' : '#91A7B5'
                                 }}
                             />
                         )}

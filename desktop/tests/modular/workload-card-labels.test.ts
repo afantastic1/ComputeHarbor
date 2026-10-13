@@ -51,8 +51,12 @@ describe('WORKLOAD_COLOR_MAP', () => {
         }
     })
 
-    it('colors in-flight jobs with the GPU chart yellow', () => {
-        expect(GPU_COLOR_PALETTE).toContain(WORKLOAD_COLOR_MAP.yellow)
+    it('maps operational states to the approved harbor palette', () => {
+        expect(WORKLOAD_COLOR_MAP.yellow).toBe('#F2A65A')
+        expect(WORKLOAD_COLOR_MAP.blue).toBe('#4D9FFF')
+        expect(WORKLOAD_COLOR_MAP.green).toBe('#25D0B1')
+        expect(WORKLOAD_COLOR_MAP.red).toBe('#F16D78')
+        expect(GPU_COLOR_PALETTE).toContain('#4D9FFF')
     })
 })
 
