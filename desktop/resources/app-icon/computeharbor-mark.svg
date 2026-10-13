@@ -1,0 +1,12 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-labelledby="title">
+  <title id="title">ComputeHarbor</title>
+  <rect width="32" height="32" rx="7" fill="#07131F"/>
+  <path d="M4 5.5v13.25L12.25 27V14.5L4 5.5Z" fill="#25D0B1" opacity=".72"/>
+  <path d="M28 5.5v13.25L19.75 27V14.5L28 5.5Z" fill="#25D0B1"/>
+  <path d="M14.25 8h3.5v15.5h-3.5z" fill="#25D0B1"/>
+  <path d="M14.25 25.5h3.5V29h-3.5z" fill="#25D0B1" opacity=".55"/>
+</svg>
