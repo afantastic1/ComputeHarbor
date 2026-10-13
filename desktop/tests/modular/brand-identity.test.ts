@@ -45,4 +45,10 @@ describe('ComputeHarbor product identity', () => {
             'Coordinate local AI engines and distributed inference from one harbor.'
         )
     })
+
+    it('uses the independent product name in package metadata', () => {
+        const packageText = readFileSync(resolve(desktopRoot, 'package.json'), 'utf8')
+        const packageMetadata: { description?: string } = JSON.parse(packageText)
+        expect(packageMetadata.description).toBe('ComputeHarbor distributed AI control plane')
+    })
 })

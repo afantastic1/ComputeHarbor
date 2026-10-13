@@ -31,16 +31,6 @@ export const CHART_COLORS = {
 /**
  * Color palettes for cycling through multiple GPUs
  */
-export const GPU_COLOR_PALETTE = [
-    COMPUTE_BLUE,
-    '#75B8FF',
-    '#2E7FD2',
-    '#86A7FF'
-] as const
+export const GPU_COLOR_PALETTE = [COMPUTE_BLUE, '#75B8FF', '#2E7FD2', '#86A7FF'] as const
 
-export const VRAM_COLOR_PALETTE = [
-    HARBOR_CYAN,
-    '#67DBC6',
-    '#159A85',
-    '#56B6C8'
-] as const
+export const VRAM_COLOR_PALETTE = [HARBOR_CYAN, '#67DBC6', '#159A85', '#56B6C8'] as const

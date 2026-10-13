@@ -17,9 +17,9 @@ describe('ComputeHarbor theme contract', () => {
         const indexCss = readFileSync(resolve(stylesRoot, 'index.css'), 'utf8')
         const themeCss = readTheme()
 
-        expect(indexCss.indexOf("@import '../lib/kaizen-ui-foundations/components.css';")).toBeLessThan(
-            indexCss.indexOf("@import './computeharbor-theme.css';")
-        )
+        expect(
+            indexCss.indexOf("@import '../lib/kaizen-ui-foundations/components.css';")
+        ).toBeLessThan(indexCss.indexOf("@import './computeharbor-theme.css';"))
         expect(themeCss).toContain('--ch-harbor-cyan: #25d0b1')
         expect(themeCss).toContain('--ch-deep-sea: #07131f')
         expect(themeCss).toContain('--ch-harbor-blue: #10283a')
@@ -29,6 +29,7 @@ describe('ComputeHarbor theme contract', () => {
         expect(themeCss).toContain('--ch-mist-white: #eaf2f7')
         expect(themeCss).toContain('--ch-sea-fog: #91a7b5')
         expect(themeCss).toContain('--ch-border: #234052')
+        expect(indexCss).not.toMatch(/#76b900|#a5de15/i)
     })
 
     it('keeps keyboard focus visible', () => {

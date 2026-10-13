@@ -187,7 +187,10 @@ function buildSourceIcons(): void {
         header.writeUInt32LE(dataOffset, entry + 12)
         dataOffset += png.data.length
     })
-    writeFileSync(resolve(srcDir, 'pair.ico'), Buffer.concat([header, ...icoPngs.map(png => png.data)]))
+    writeFileSync(
+        resolve(srcDir, 'pair.ico'),
+        Buffer.concat([header, ...icoPngs.map(png => png.data)])
+    )
 }
 
 function srcPngPath(size: number): string {

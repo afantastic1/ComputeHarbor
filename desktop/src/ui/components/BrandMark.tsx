@@ -26,11 +26,7 @@ export function BrandMark({ size = 20, title, className }: BrandMarkProps) {
             {...accessibleProps}
         >
             {title ? <title id={titleId}>{title}</title> : null}
-            <path
-                d="M4 5.5v13.25L12.25 27V14.5L4 5.5Z"
-                fill="currentColor"
-                opacity="0.72"
-            />
+            <path d="M4 5.5v13.25L12.25 27V14.5L4 5.5Z" fill="currentColor" opacity="0.72" />
             <path d="M28 5.5v13.25L19.75 27V14.5L28 5.5Z" fill="currentColor" />
             <path d="M14.25 8h3.5v15.5h-3.5z" fill="currentColor" />
             <path d="M14.25 25.5h3.5V29h-3.5z" fill="currentColor" opacity="0.55" />
