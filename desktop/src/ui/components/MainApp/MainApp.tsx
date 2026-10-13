@@ -28,6 +28,7 @@ import { getWelcomeEngineCandidates } from '@/ui/constants/welcome'
 import { hasWelcomeEngineStatuses } from '@/ui/utils/welcome-install'
 import { useOverviewUiStore } from '@/ui/stores/overview-ui.store'
 import { InferenceDemoToast } from '@/ui/components/InferenceDemoToast'
+import { BrandMark } from '@/ui/components/BrandMark'
 
 function MainApp() {
     const { connected, selfId } = useConnectionStore(state => state)
@@ -104,7 +105,10 @@ function MainApp() {
     return (
         <Stack className="overflow-hidden bg-black h-full w-full">
             <div className="absolute top-0 right-0 w-full h-full app-bg"></div>
-            <AppBar title={APP_DISPLAY_NAME} />
+            <AppBar
+                title={APP_DISPLAY_NAME}
+                slotTitleLeft={<BrandMark size={22} className="app-brand-mark" />}
+            />
             <ErrorModal />
 
             <Stack className="flex-1 min-h-0 min-w-0 grow px-4 relative">

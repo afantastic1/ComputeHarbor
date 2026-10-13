@@ -85,7 +85,9 @@ export function AppBar({
     }, [isMaximized])
 
     return (
-        <header className={`${headerClassName} w-full px-6 pt-6 pb-5 relative box-border`}>
+        <header
+            className={`${headerClassName} app-title-bar w-full px-6 pt-5 pb-4 relative box-border`}
+        >
             <Flex justify="between" align="center" gap="3">
                 {/* Draggable region for window movement */}
                 <Flex align="center" gap="2" className="grow min-w-0">
@@ -94,7 +96,7 @@ export function AppBar({
                             {slotTitleLeft}
                         </Flex>
                     )}
-                    <Text kind="body/bold/lg" className="capitalize truncate">
+                    <Text kind="body/bold/lg" className="app-wordmark truncate">
                         {title}
                     </Text>
                     {slotTitleRight && (
