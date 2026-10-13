@@ -8,6 +8,7 @@
 @import '../lib/kaizen-ui-foundations/components.css';
 
 @import './sheen.css';
+@import './computeharbor-theme.css';
 
 @source "../components";
 @source "../constants";

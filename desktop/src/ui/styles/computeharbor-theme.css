@@ -1,0 +1,175 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+:root,
+html {
+    --ch-harbor-cyan: #25d0b1;
+    --ch-deep-sea: #07131f;
+    --ch-harbor-blue: #10283a;
+    --ch-compute-blue: #4d9fff;
+    --ch-beacon-orange: #f2a65a;
+    --ch-failure-red: #f16d78;
+    --ch-mist-white: #eaf2f7;
+    --ch-sea-fog: #91a7b5;
+    --ch-border: #234052;
+    --ch-surface-raised: #133044;
+    --ch-surface-muted: #0b1d2b;
+    --ch-shadow: rgb(1 10 18 / 42%);
+
+    --color-brand: var(--ch-harbor-cyan);
+    --pair-color-brand: var(--ch-harbor-cyan);
+    --border-color-brand: var(--ch-harbor-cyan);
+    --text-color-brand: var(--ch-harbor-cyan);
+    --color-black: var(--ch-deep-sea);
+    --color-white: var(--ch-mist-white);
+    --border-color-base: var(--ch-border);
+    --color-surface-overlay-background: var(--ch-harbor-blue);
+    --background-color-surface-base: var(--ch-deep-sea);
+    --background-color-surface-raised: var(--ch-harbor-blue);
+    --background-color-interaction-primary-base: var(--ch-harbor-cyan);
+    --background-color-interaction-primary-hover: #4bdac0;
+    --background-color-interaction-primary-pressed: #1eb79d;
+    --outline-color-focus: var(--ch-harbor-cyan);
+    color: var(--ch-mist-white);
+    color-scheme: dark;
+}
+
+html,
+body,
+#root {
+    background: var(--ch-deep-sea);
+}
+
+body {
+    color: var(--ch-mist-white);
+    background-image:
+        radial-gradient(circle at 18% -8%, rgb(37 208 177 / 10%), transparent 36rem),
+        radial-gradient(circle at 92% 18%, rgb(77 159 255 / 7%), transparent 32rem);
+}
+
+::selection {
+    color: var(--ch-deep-sea);
+    background: var(--ch-harbor-cyan);
+}
+
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid var(--ch-harbor-cyan);
+    outline-offset: 2px;
+}
+
+.app-bg {
+    background:
+        linear-gradient(135deg, rgb(37 208 177 / 3%), transparent 42%),
+        radial-gradient(circle at 78% 8%, rgb(77 159 255 / 8%), transparent 38rem);
+    pointer-events: none;
+}
+
+.pair-paper,
+.nv-panel {
+    border-color: var(--ch-border);
+    background-color: color-mix(in srgb, var(--ch-harbor-blue) 88%, transparent);
+    box-shadow:
+        inset 0 1px 0 rgb(234 242 247 / 5%),
+        0 14px 36px var(--ch-shadow);
+}
+
+.pair-paper.card-high,
+.pair-paper.workload-card.card-high > .workload-card-content,
+.pair-paper.card-low:not(.workload-card),
+.pair-paper.workload-card.card-low > .workload-card-content {
+    border: 1px solid var(--ch-border);
+    background-color: var(--ch-harbor-blue);
+    background-image: linear-gradient(145deg, rgb(234 242 247 / 4%), transparent 44%);
+    box-shadow:
+        inset 0 1px 0 rgb(234 242 247 / 6%),
+        0 12px 30px var(--ch-shadow);
+}
+
+.no-bg-nav .nv-vertical-nav-item:not([aria-disabled='true']) {
+    color: var(--ch-sea-fog);
+}
+
+.no-bg-nav .nv-vertical-nav-item:not([aria-disabled='true']):hover {
+    color: var(--ch-mist-white);
+    background-color: rgb(37 208 177 / 7%);
+}
+
+.no-bg-nav .nv-vertical-nav-item--active:not([aria-disabled='true']) {
+    color: var(--ch-mist-white);
+    background-color: rgb(37 208 177 / 10%);
+    box-shadow: inset 3px 0 var(--ch-harbor-cyan);
+}
+
+.nv-button,
+.nv-tabs-trigger,
+.nv-vertical-nav-item,
+.pair-accordion-summary {
+    transition:
+        color 180ms ease,
+        background-color 180ms ease,
+        border-color 180ms ease,
+        box-shadow 180ms ease,
+        transform 180ms ease;
+}
+
+.nv-button:active:not(:disabled) {
+    transform: translateY(1px);
+}
+
+.text-subtle-color,
+.text-subtle2 {
+    color: var(--ch-sea-fog);
+}
+
+.line-chart-container-bg {
+    background-color: var(--ch-surface-muted);
+}
+
+.line-chart-container-shadow {
+    box-shadow:
+        inset 0 0 0 1px var(--ch-border),
+        inset 0 10px 30px rgb(1 10 18 / 42%);
+}
+
+.pair-dropdown-backdrop,
+.nv-modal-overlay::backdrop,
+.nv-dropdown-content::backdrop,
+.nv-select-content::backdrop {
+    background-color: rgb(3 12 21 / 68%);
+    backdrop-filter: blur(3px) saturate(0.7);
+}
+
+::-webkit-scrollbar-track {
+    background: var(--ch-deep-sea);
+}
+
+::-webkit-scrollbar-thumb {
+    border: 3px solid var(--ch-deep-sea);
+    border-radius: 999px;
+    background: var(--ch-border);
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--ch-sea-fog) 70%, var(--ch-border));
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+    }
+
+    .spinner-element,
+    .spinner-element-small,
+    .spinner-element-medium,
+    .spinner-element-large,
+    .pulsing,
+    .workload-item-card,
+    .ring-item {
+        animation: none !important;
+    }
+}
