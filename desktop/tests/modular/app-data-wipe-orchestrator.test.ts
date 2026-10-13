@@ -68,7 +68,7 @@ describe('resetting app data', () => {
         ])
 
         await expect(wipeAppDataAndRelaunch()).rejects.toThrow(
-            'Could not remove LM Studio, which NVIDIA PAIR installed. Your data was not deleted. ' +
+            'Could not remove LM Studio, which ComputeHarbor installed. Your data was not deleted. ' +
                 'Try again, or uninstall it yourself first.'
         )
         expectNothingDeleted()
@@ -78,7 +78,7 @@ describe('resetting app data', () => {
         mocks.supervisor.uninstallManagedEngines.mockRejectedValue(new Error('broker closed'))
 
         await expect(wipeAppDataAndRelaunch()).rejects.toThrow(
-            'Could not remove the engines NVIDIA PAIR installed: broker closed. Your data was not deleted.'
+            'Could not remove the engines ComputeHarbor installed: broker closed. Your data was not deleted.'
         )
         expectNothingDeleted()
     })
@@ -87,7 +87,7 @@ describe('resetting app data', () => {
         mocks.supervisor.hasProcess.mockReturnValue(false)
 
         await expect(wipeAppDataAndRelaunch()).rejects.toThrow(
-            'The NVIDIA PAIR service is not running, so the engines it installed cannot be removed. ' +
+            'The ComputeHarbor service is not running, so the engines it installed cannot be removed. ' +
                 'Your data was not deleted. Restart the service and try again.'
         )
         expect(mocks.supervisor.uninstallManagedEngines).not.toHaveBeenCalled()

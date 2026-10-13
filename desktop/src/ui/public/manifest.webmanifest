@@ -1,6 +1,6 @@
 {
-    "name": "NVIDIA PAIR",
-    "short_name": "NVIDIA PAIR",
+    "name": "ComputeHarbor",
+    "short_name": "ComputeHarbor",
     "description": "Access your inference cluster from anywhere.",
     "start_url": "./",
     "scope": "./",

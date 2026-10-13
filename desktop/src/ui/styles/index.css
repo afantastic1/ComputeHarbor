@@ -320,11 +320,24 @@ body .os-scrollbar {
     min-height: 32px;
 }
 
+.settings-accordion-card-summary {
+    justify-content: space-between;
+    min-height: 32px;
+}
+
 .cloud-providers-card-chevron {
     transition: transform 150ms ease;
 }
 
+.settings-accordion-card-chevron {
+    transition: transform 150ms ease;
+}
+
 .cloud-providers-card[open] .cloud-providers-card-chevron {
+    transform: rotate(180deg);
+}
+
+.settings-accordion-card[open] .settings-accordion-card-chevron {
     transform: rotate(180deg);
 }
 
