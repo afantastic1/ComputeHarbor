@@ -1,7 +1,7 @@
 {
     "name": "ComputeHarbor",
     "short_name": "ComputeHarbor",
-    "description": "Access your inference cluster from anywhere.",
+    "description": "Coordinate local AI engines and distributed inference from one harbor.",
     "start_url": "./",
     "scope": "./",
     "display": "standalone",
