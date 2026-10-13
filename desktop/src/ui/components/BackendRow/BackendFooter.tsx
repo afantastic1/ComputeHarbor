@@ -11,7 +11,7 @@ import { canAutoInstallBackendForOs } from '@/ui/utils/backend-target-os'
 
 const INLINE_LINK_STYLE: CSSProperties = {
     alignItems: 'center',
-    color: 'var(--color-brand, #76b900)',
+    color: 'var(--color-brand, #25D0B1)',
     display: 'inline-flex',
     lineHeight: 1
 }

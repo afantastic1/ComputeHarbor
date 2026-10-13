@@ -18,6 +18,7 @@ import type {
     StrataSettings
 } from '@/shared/types/strata'
 import { InlineErrorBanner } from '@/ui/components/InlineErrorBanner'
+import { ExpandMore } from '@/ui/components/icons'
 import getErrorString from '@/shared/utils/get-error-string'
 
 const DEFAULT_SETTINGS: StrataSettings = {
@@ -99,58 +100,73 @@ export default function StrataSettingsCard() {
     }, [settings])
 
     return (
-        <Stack gap="4" className="rounded border border-base p-4">
-            <Flex align="center" justify="between" gap="3">
-                <Stack gap="1">
-                    <Text kind="body/bold/md">Strata (External)</Text>
-                    <Text kind="body/regular/sm">
-                        Connect to a Strata instance already running on this PC.
+        <details className="pair-paper w-full p-4 settings-accordion-card">
+            <summary className="pair-accordion-summary settings-accordion-card-summary">
+                <Flex align="center" gap="2">
+                    <ExpandMore
+                        className="settings-accordion-card-chevron"
+                        style={{ fontSize: 14 }}
+                    />
+                    <Stack gap="1">
+                        <Text kind="body/semibold/md">Strata (External)</Text>
+                        <Text kind="body/regular/sm" className="text-subtle-color">
+                            Connect to a Strata instance already running on this PC.
+                        </Text>
+                    </Stack>
+                </Flex>
+                <Flex align="center" gap="3" wrap="wrap">
+                    <Text kind="body/regular/sm" className="text-subtle-color">
+                        {settings.enabled ? 'enabled' : 'disabled'}
                     </Text>
-                </Stack>
-                <Switch
-                    size="small"
-                    checked={settings.enabled}
-                    onCheckedChange={value => update('enabled', value)}
-                    aria-label="Enable Strata connection"
-                />
-            </Flex>
-            <FormField slotLabel="Loopback endpoint (root or /v1)">
-                <TextInput
-                    size="small"
-                    value={settings.endpoint}
-                    onValueChange={value => update('endpoint', value)}
-                    placeholder="http://127.0.0.1:8080"
-                />
-            </FormField>
-            <FormField slotLabel="Expected model ID (optional)">
-                <TextInput
-                    size="small"
-                    value={settings.modelId}
-                    onValueChange={value => update('modelId', value)}
-                    placeholder="Validate an ID returned by GET /v1/models"
-                />
-            </FormField>
-            <FormField slotLabel="API key environment variable name (optional; do not enter the key)">
-                <TextInput
-                    size="small"
-                    value={settings.apiKeyEnv}
-                    onValueChange={value => update('apiKeyEnv', value)}
-                    placeholder="STRATA_API_KEY"
-                />
-            </FormField>
-            {probe && <Text kind="body/regular/sm">{probeMessage(probe)}</Text>}
-            {error && <InlineErrorBanner severity="error" message={error} />}
-            <Flex align="center" gap="3" wrap="wrap">
-                <Button kind="secondary" size="small" onClick={testConnection} disabled={busy}>
-                    Test connection
-                </Button>
-                <Button kind="primary" size="small" onClick={saveSettings} disabled={busy}>
-                    Save Strata settings
-                </Button>
-                <Anchor href="https://github.com/Niko1221/Strata" target="_blank" rel="noreferrer">
-                    Strata documentation
-                </Anchor>
-            </Flex>
-        </Stack>
+                    <span onClick={event => event.stopPropagation()}>
+                        <Switch
+                            size="small"
+                            checked={settings.enabled}
+                            onCheckedChange={value => update('enabled', value)}
+                            aria-label="Enable Strata connection"
+                        />
+                    </span>
+                </Flex>
+            </summary>
+            <Stack gap="4" className="pt-4">
+                <FormField slotLabel="Loopback endpoint (root or /v1)">
+                    <TextInput
+                        size="small"
+                        value={settings.endpoint}
+                        onValueChange={value => update('endpoint', value)}
+                        placeholder="http://127.0.0.1:8080"
+                    />
+                </FormField>
+                <FormField slotLabel="Expected model ID (optional)">
+                    <TextInput
+                        size="small"
+                        value={settings.modelId}
+                        onValueChange={value => update('modelId', value)}
+                        placeholder="Validate an ID returned by GET /v1/models"
+                    />
+                </FormField>
+                <FormField slotLabel="API key environment variable name (optional; do not enter the key)">
+                    <TextInput
+                        size="small"
+                        value={settings.apiKeyEnv}
+                        onValueChange={value => update('apiKeyEnv', value)}
+                        placeholder="STRATA_API_KEY"
+                    />
+                </FormField>
+                {probe && <Text kind="body/regular/sm">{probeMessage(probe)}</Text>}
+                {error && <InlineErrorBanner severity="error" message={error} />}
+                <Flex align="center" gap="3" wrap="wrap">
+                    <Button kind="secondary" size="small" onClick={testConnection} disabled={busy}>
+                        Test connection
+                    </Button>
+                    <Button kind="primary" size="small" onClick={saveSettings} disabled={busy}>
+                        Save Strata settings
+                    </Button>
+                    <Anchor href="https://github.com/Niko1221/Strata" target="_blank" rel="noreferrer">
+                        Strata documentation
+                    </Anchor>
+                </Flex>
+            </Stack>
+        </details>
     )
 }

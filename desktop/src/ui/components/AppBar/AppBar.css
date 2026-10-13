@@ -16,6 +16,25 @@
     margin-right: -0.5rem;
 }
 
+.app-title-bar {
+    z-index: 2;
+    border-bottom: 1px solid rgb(35 64 82 / 72%);
+    background: rgb(7 19 31 / 74%);
+    box-shadow: 0 12px 30px rgb(1 10 18 / 18%);
+    backdrop-filter: blur(14px) saturate(1.1);
+}
+
+.app-brand-mark {
+    display: block;
+    color: var(--ch-harbor-cyan, #25d0b1);
+    filter: drop-shadow(0 0 10px rgb(37 208 177 / 20%));
+}
+
+.app-wordmark {
+    color: var(--ch-mist-white, #eaf2f7);
+    letter-spacing: -0.025em;
+}
+
 @media (max-width: 500px) {
     body .app-bar-buttons button {
         padding: 0.25rem !important;

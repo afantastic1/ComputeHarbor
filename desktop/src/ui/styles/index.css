@@ -8,6 +8,7 @@
 @import '../lib/kaizen-ui-foundations/components.css';
 
 @import './sheen.css';
+@import './computeharbor-theme.css';
 
 @source "../components";
 @source "../constants";
@@ -32,7 +33,7 @@ body {
         'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    --color-green-400: #a5de15;
+    --color-green-400: #25d0b1;
 }
 
 :root {
@@ -294,7 +295,7 @@ body .os-scrollbar {
 }
 
 .pair-link {
-    color: var(--color-brand, #76b900);
+    color: var(--color-brand, #25d0b1);
     text-decoration: none;
 }
 
@@ -320,11 +321,24 @@ body .os-scrollbar {
     min-height: 32px;
 }
 
+.settings-accordion-card-summary {
+    justify-content: space-between;
+    min-height: 32px;
+}
+
 .cloud-providers-card-chevron {
     transition: transform 150ms ease;
 }
 
+.settings-accordion-card-chevron {
+    transition: transform 150ms ease;
+}
+
 .cloud-providers-card[open] .cloud-providers-card-chevron {
+    transform: rotate(180deg);
+}
+
+.settings-accordion-card[open] .settings-accordion-card-chevron {
     transform: rotate(180deg);
 }
 
@@ -375,7 +389,7 @@ body .os-scrollbar {
 
 .no-bg-nav .nv-vertical-nav-item--active:not([aria-disabled='true']) {
     background-color: #ffffff0a;
-    box-shadow: inset 5px 0 #76b900;
+    box-shadow: inset 5px 0 #25d0b1;
     font-weight: 700;
     color: var(--color-white);
     border-top-left-radius: 0;
@@ -413,8 +427,8 @@ body .os-scrollbar {
     max-height: 16px;
     margin: 0 8px;
     vertical-align: middle;
-    border: 2px solid var(--pair-color-brand, #76b900);
-    border-top-color: color-mix(in srgb, var(--pair-color-brand, #76b900) 20%, transparent);
+    border: 2px solid var(--pair-color-brand, #25d0b1);
+    border-top-color: color-mix(in srgb, var(--pair-color-brand, #25d0b1) 20%, transparent);
     border-radius: 50%;
     animation: spinner-rotate 0.65s linear infinite;
 }
@@ -429,8 +443,8 @@ body .os-scrollbar {
     max-height: 12px;
     margin: 0;
     vertical-align: middle;
-    border: 2px solid var(--pair-color-brand, #76b900);
-    border-top-color: color-mix(in srgb, var(--pair-color-brand, #76b900) 20%, transparent);
+    border: 2px solid var(--pair-color-brand, #25d0b1);
+    border-top-color: color-mix(in srgb, var(--pair-color-brand, #25d0b1) 20%, transparent);
     border-radius: 50%;
     animation: spinner-rotate 0.65s linear infinite;
 }
@@ -445,8 +459,8 @@ body .os-scrollbar {
     max-height: 16px;
     margin: 0;
     vertical-align: middle;
-    border: 2.5px solid var(--pair-color-brand, #76b900);
-    border-top-color: color-mix(in srgb, var(--pair-color-brand, #76b900) 20%, transparent);
+    border: 2.5px solid var(--pair-color-brand, #25d0b1);
+    border-top-color: color-mix(in srgb, var(--pair-color-brand, #25d0b1) 20%, transparent);
     border-radius: 50%;
     animation: spinner-rotate 0.65s linear infinite;
 }
@@ -461,8 +475,8 @@ body .os-scrollbar {
     max-height: 32px;
     margin: 0;
     vertical-align: middle;
-    border: 3px solid var(--pair-color-brand, #76b900);
-    border-top-color: color-mix(in srgb, var(--pair-color-brand, #76b900) 20%, transparent);
+    border: 3px solid var(--pair-color-brand, #25d0b1);
+    border-top-color: color-mix(in srgb, var(--pair-color-brand, #25d0b1) 20%, transparent);
     border-radius: 50%;
     animation: spinner-rotate 0.65s linear infinite;
 }

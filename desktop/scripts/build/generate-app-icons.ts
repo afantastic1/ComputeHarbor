@@ -29,6 +29,7 @@
 import { Icns, IcnsImage } from '@fiahfy/icns'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { resolve } from 'path'
+import { deflateSync } from 'zlib'
 
 const repoRoot = resolve(__dirname, '..', '..')
 const srcDir = resolve(repoRoot, 'resources', 'app-icon')
@@ -47,6 +48,150 @@ const requiredSizes = [16, 32, 64, 128, 256, 512, 1024] as const
  * (1024 is intentionally omitted — it is not an indexed hicolor size).
  */
 const linuxIconSizes = [16, 24, 32, 48, 64, 128, 256, 512] as const
+
+interface Point {
+    x: number
+    y: number
+}
+
+const LEFT_WALL: Point[] = [
+    { x: 4, y: 5.5 },
+    { x: 4, y: 18.75 },
+    { x: 12.25, y: 27 },
+    { x: 12.25, y: 14.5 }
+]
+const RIGHT_WALL: Point[] = [
+    { x: 28, y: 5.5 },
+    { x: 28, y: 18.75 },
+    { x: 19.75, y: 27 },
+    { x: 19.75, y: 14.5 }
+]
+
+function pointInPolygon(x: number, y: number, points: Point[]): boolean {
+    let inside = false
+    for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+        const a = points[i]
+        const b = points[j]
+        const crosses = a.y > y !== b.y > y
+        if (crosses && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) inside = !inside
+    }
+    return inside
+}
+
+function insideRoundedSquare(x: number, y: number): boolean {
+    const radius = 7
+    const nearLeft = x < radius
+    const nearRight = x > 32 - radius
+    const nearTop = y < radius
+    const nearBottom = y > 32 - radius
+    if (!(nearLeft || nearRight) || !(nearTop || nearBottom)) return true
+    const cx = nearLeft ? radius : 32 - radius
+    const cy = nearTop ? radius : 32 - radius
+    return (x - cx) ** 2 + (y - cy) ** 2 <= radius ** 2
+}
+
+function markOpacity(x: number, y: number): number {
+    if (pointInPolygon(x, y, RIGHT_WALL)) return 1
+    if (pointInPolygon(x, y, LEFT_WALL)) return 0.72
+    if (x >= 14.25 && x <= 17.75 && y >= 8 && y <= 23.5) return 1
+    if (x >= 14.25 && x <= 17.75 && y >= 25.5 && y <= 29) return 0.55
+    return 0
+}
+
+function crc32(buffer: Buffer): number {
+    let crc = 0xffffffff
+    for (const byte of buffer) {
+        crc ^= byte
+        for (let bit = 0; bit < 8; bit += 1) {
+            crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0)
+        }
+    }
+    return (crc ^ 0xffffffff) >>> 0
+}
+
+function pngChunk(name: string, data: Buffer): Buffer {
+    const type = Buffer.from(name, 'ascii')
+    const chunk = Buffer.alloc(12 + data.length)
+    chunk.writeUInt32BE(data.length, 0)
+    type.copy(chunk, 4)
+    data.copy(chunk, 8)
+    chunk.writeUInt32BE(crc32(Buffer.concat([type, data])), 8 + data.length)
+    return chunk
+}
+
+function renderIconPng(size: number): Buffer {
+    const samples = size <= 64 ? 4 : 2
+    const rowBytes = size * 4 + 1
+    const raw = Buffer.alloc(rowBytes * size)
+    for (let py = 0; py < size; py += 1) {
+        const row = py * rowBytes
+        raw[row] = 0
+        for (let px = 0; px < size; px += 1) {
+            let backgroundSamples = 0
+            let markSamples = 0
+            for (let sy = 0; sy < samples; sy += 1) {
+                for (let sx = 0; sx < samples; sx += 1) {
+                    const x = ((px + (sx + 0.5) / samples) * 32) / size
+                    const y = ((py + (sy + 0.5) / samples) * 32) / size
+                    if (insideRoundedSquare(x, y)) backgroundSamples += 1
+                    markSamples += markOpacity(x, y)
+                }
+            }
+            const count = samples * samples
+            const backgroundAlpha = backgroundSamples / count
+            const markAlpha = markSamples / count
+            const alpha = backgroundAlpha
+            const blend = Math.min(1, markAlpha)
+            const offset = row + 1 + px * 4
+            raw[offset] = Math.round(7 * (1 - blend) + 37 * blend)
+            raw[offset + 1] = Math.round(19 * (1 - blend) + 208 * blend)
+            raw[offset + 2] = Math.round(31 * (1 - blend) + 177 * blend)
+            raw[offset + 3] = Math.round(alpha * 255)
+        }
+    }
+
+    const ihdr = Buffer.alloc(13)
+    ihdr.writeUInt32BE(size, 0)
+    ihdr.writeUInt32BE(size, 4)
+    ihdr[8] = 8
+    ihdr[9] = 6
+    return Buffer.concat([
+        PNG_SIGNATURE,
+        pngChunk('IHDR', ihdr),
+        pngChunk('IDAT', deflateSync(raw, { level: 9 })),
+        pngChunk('IEND', Buffer.alloc(0))
+    ])
+}
+
+function buildSourceIcons(): void {
+    const sizes = [...new Set([...requiredSizes, ...linuxIconSizes])].sort((a, b) => a - b)
+    const pngs = sizes.map(size => ({ size, data: renderIconPng(size) }))
+    for (const png of pngs) writeFileSync(srcPngPath(png.size), png.data)
+
+    const icoPngs = pngs.filter(png => png.size <= 256)
+    const headerSize = 6 + icoPngs.length * 16
+    const header = Buffer.alloc(headerSize)
+    header.writeUInt16LE(0, 0)
+    header.writeUInt16LE(1, 2)
+    header.writeUInt16LE(icoPngs.length, 4)
+    let dataOffset = headerSize
+    icoPngs.forEach((png, index) => {
+        const entry = 6 + index * 16
+        header[entry] = png.size === 256 ? 0 : png.size
+        header[entry + 1] = png.size === 256 ? 0 : png.size
+        header[entry + 2] = 0
+        header[entry + 3] = 0
+        header.writeUInt16LE(1, entry + 4)
+        header.writeUInt16LE(32, entry + 6)
+        header.writeUInt32LE(png.data.length, entry + 8)
+        header.writeUInt32LE(dataOffset, entry + 12)
+        dataOffset += png.data.length
+    })
+    writeFileSync(
+        resolve(srcDir, 'pair.ico'),
+        Buffer.concat([header, ...icoPngs.map(png => png.data)])
+    )
+}
 
 function srcPngPath(size: number): string {
     return resolve(srcDir, `pair-${size}.png`)
@@ -138,6 +283,7 @@ function buildLinuxIconSet(): void {
 }
 
 function main(): void {
+    buildSourceIcons()
     assertSources()
     // resources/icons/ is generated output (gitignored), so it may not exist on a
     // clean checkout — create it (and the linux subdir) before anything writes.

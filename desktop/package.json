@@ -1,7 +1,7 @@
 {
     "name": "nvpair",
     "version": "1.0.0",
-    "description": "NVIDIA PAIR",
+    "description": "ComputeHarbor distributed AI control plane",
     "engines": {
         "node": ">=25.5.0"
     },

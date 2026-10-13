@@ -47,13 +47,13 @@ export default function EndpointContent({ className }: { className?: string }) {
             {gatewayUrl && (
                 <Flex align="center" gap="4" justify="start" onClick={() => handleCopy(gatewayUrl)}>
                     <Stack className="grow min-w-0">
-                        <Text kind="body/semibold/sm">PAIR OpenAI-compatible API</Text>
+                        <Text kind="body/semibold/sm">ComputeHarbor OpenAI-compatible API</Text>
                         <Text kind="body/regular/sm" className="text-subtle-color truncate">
                             {gatewayUrl}
                         </Text>
                     </Stack>
                     <DismissibleTooltip slotContent="Copy" placement="right">
-                        <Button kind="tertiary" size="small" aria-label="Copy PAIR API URL">
+                        <Button kind="tertiary" size="small" aria-label="Copy ComputeHarbor API URL">
                             {copied ? (
                                 <Text kind="body/regular/sm">Copied</Text>
                             ) : (

@@ -12,8 +12,8 @@ export function LocalBadge() {
             kind="body/regular/xs"
             className="shrink-0 rounded-full px-1.5 py-0.5 uppercase"
             style={{
-                color: 'var(--color-brand, #76b900)',
-                backgroundColor: 'color-mix(in srgb, var(--color-brand, #76b900) 18%, transparent)',
+                color: 'var(--color-brand, #25D0B1)',
+                backgroundColor: 'color-mix(in srgb, var(--color-brand, #25D0B1) 18%, transparent)',
                 letterSpacing: '0.04em',
                 lineHeight: 1
             }}
