@@ -77,22 +77,9 @@ class MnnHttpServer(
         }
         clientSockets.toList().forEach(::closeClient)
         activeRequests.toList().forEach(inference::cancel)
-        val executors = listOf(requestWorkers, inferenceWorkers, healthWorkers)
-        executors.forEach { it.shutdown() }
-        for (executor in executors) {
-            val terminated = try {
-                executor.awaitTermination(SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            } catch (failure: InterruptedException) {
-                interrupted = true
-                failures.add(failure)
-                false
-            }
-            if (!terminated) {
-                activeRequests.toList().forEach(inference::cancel)
-                executor.shutdownNow()
-                failures.add(IllegalStateException("MNN HTTP worker executor did not terminate."))
-            }
-        }
+        // Native MNN prefill cannot always be interrupted immediately.  Do not
+        // make a user-requested PAIR stop wait for an in-flight generation.
+        listOf(requestWorkers, inferenceWorkers, healthWorkers).forEach { it.shutdownNow() }
         val currentAcceptThread = acceptThread
         if (currentAcceptThread != null) {
             try {
@@ -299,23 +286,32 @@ class MnnHttpServer(
         val parsed = OpenAiRequestParser.parse(parseJson(request.body))
         val requestId = nextRequestId.incrementAndGet()
         val completionId = "chatcmpl-$requestId"
+        val effectiveToolsJson = if (parsed.chat.toolChoice == "none") null else parsed.chat.toolsJson
+        val hasTools = !effectiveToolsJson.isNullOrBlank()
         activeRequests.add(requestId)
         try {
             if (parsed.stream) {
                 val stream = SseStream(socket.getOutputStream(), completionId, parsed.chat.modelId)
+                val generatedText = StringBuilder()
                 when (val result = inference.generate(requestId, parsed.chat) { token ->
                     try {
-                        stream.token(token)
+                        if (hasTools) generatedText.append(token) else stream.token(token)
                     } catch (failure: IOException) {
                         inference.cancel(requestId)
                         throw failure
                     }
                 }) {
-                    is MnnResult.Success -> stream.finish(
-                        result.value.finishReason,
-                        result.value.metrics,
-                        parsed.includeUsage,
-                    )
+                    is MnnResult.Success -> {
+                        val parsedOutput = OpenAiToolCallParser.parse(generatedText.toString(), effectiveToolsJson)
+                        if (hasTools && parsedOutput.content != null) stream.token(parsedOutput.content)
+                        if (parsedOutput.toolCalls.isNotEmpty()) stream.toolCalls(parsedOutput.toolCalls)
+                        stream.finish(
+                            result.value.finishReason,
+                            result.value.metrics,
+                            parsed.includeUsage,
+                            if (parsedOutput.toolCalls.isNotEmpty()) "tool_calls" else null,
+                        )
+                    }
                     is MnnResult.Failure -> {
                         logInferenceFailure(result.error.code)
                         val error = OpenAiResponseWriter.error(errorType(result.error.code), errorCode(result.error.code), result.error.message)
@@ -325,18 +321,22 @@ class MnnHttpServer(
             } else {
                 val text = StringBuilder()
                 when (val result = inference.generate(requestId, parsed.chat) { token -> text.append(token) }) {
-                    is MnnResult.Success -> writeJson(
-                        socket,
-                        HTTP_OK,
-                        OpenAiResponseWriter.completion(
-                            completionId,
-                            parsed.chat.modelId,
-                            text.toString(),
-                            result.value.metrics.promptTokens,
-                            result.value.metrics.generatedTokens,
-                            result.value.finishReason,
-                        ),
-                    )
+                    is MnnResult.Success -> {
+                        val output = OpenAiToolCallParser.parse(text.toString(), effectiveToolsJson)
+                        writeJson(
+                            socket,
+                            HTTP_OK,
+                            OpenAiResponseWriter.completion(
+                                completionId,
+                                parsed.chat.modelId,
+                                output.content.orEmpty(),
+                                result.value.metrics.promptTokens,
+                                result.value.metrics.generatedTokens,
+                                result.value.finishReason,
+                                output.toolCalls,
+                            ),
+                        )
+                    }
                     is MnnResult.Failure -> {
                         logInferenceFailure(result.error.code)
                         writeJson(
@@ -503,6 +503,8 @@ class MnnHttpServer(
         private const val LOG_TAG = "PAIR-MNN-HTTP"
         const val DEFAULT_PORT = 14325
         private const val HTTP_REQUEST_WORKER_COUNT = 8
+        // One active generation and one waiting request are admitted by the
+        // inference service. Extra retries still receive ENGINE_BUSY promptly.
         private const val INFERENCE_WORKER_COUNT = 4
         private const val HEALTH_QUEUE_CAPACITY = 4
         private const val HTTP_BACKLOG = 16
@@ -510,8 +512,7 @@ class MnnHttpServer(
         private const val MAX_HEADER_LINE_BYTES = 8 * 1024
         private const val MAX_HEADER_BYTES = 32 * 1024
         private const val MAX_BODY_BYTES = 1024 * 1024
-        private const val SHUTDOWN_TIMEOUT_SECONDS = 10L
-        private const val SHUTDOWN_TIMEOUT_MILLIS = 10_000L
+    private const val SHUTDOWN_TIMEOUT_MILLIS = 1_000L
         private const val HTTP_OK = 200
         private const val HTTP_BAD_REQUEST = 400
         private const val HTTP_NOT_FOUND = 404

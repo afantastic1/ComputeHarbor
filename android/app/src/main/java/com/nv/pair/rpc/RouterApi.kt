@@ -35,6 +35,25 @@ class RouterApi(private val session: BrokerSession) {
         val result = session.request("cloudproviders:save", params)
         if (!result.optBoolean("saved")) throw IOException("broker did not save cloud settings")
     }
+
+    fun updateCloudProviders(settings: CloudProviderSettings, config: JSONObject) {
+        val updated = settings.copy(config = config)
+        val result = session.request("cloudproviders:save", updated.toJson(settings.cloudEnabled, settings.policy))
+        if (!result.optBoolean("saved")) throw IOException("broker did not save cloud providers")
+    }
+
+    fun setCloudProviderCredential(authRef: String, credential: String) {
+        if (authRef.isBlank()) throw IOException("provider credential reference is missing")
+        session.request(
+            "cloudproviders:credential:set",
+            JSONObject().put("authRef", authRef).put("credential", credential),
+        )
+    }
+
+    fun testCloudProvider(providerId: String): JSONObject {
+        if (providerId.isBlank()) throw IOException("provider ID is missing")
+        return session.request("cloudproviders:test", JSONObject().put("providerId", providerId))
+    }
 }
 
 data class CloudProviderSettings(
@@ -45,6 +64,8 @@ data class CloudProviderSettings(
     val perRequestMaxEstimatedCostUsd: Double,
     val cloudEnabled: Boolean,
     val authorizedNodes: List<CloudNodeAuthorization>,
+    val providers: List<CloudProviderMetadata>,
+    val providerStatusMessage: String? = null,
 ) {
     fun toJson(enabled: Boolean, routingPolicy: String): JSONObject = JSONObject()
         .put("schema_version", 1)
@@ -63,13 +84,108 @@ data class CloudProviderSettings(
         })
 }
 
+data class CloudProviderMetadata(
+    val id: String,
+    val baseUrl: String,
+    val authRef: String,
+    val enabled: Boolean,
+    val models: List<CloudModelMetadata>,
+    val credentialConfigured: Boolean = false,
+)
+
+data class CloudModelMetadata(
+    val publicId: String,
+    val upstreamId: String,
+    val capabilities: Set<String>,
+)
+
 data class CloudNodeAuthorization(val nodeUuid: String, val certFingerprint: String)
+
+data class CloudProviderConfigUpdate(
+    val config: JSONObject,
+    val replacedAuthRef: String? = null,
+)
+
+fun upsertCloudProviderConfig(config: JSONObject, provider: JSONObject): CloudProviderConfigUpdate {
+    val providerId = provider.optString("id").takeIf(String::isNotBlank)
+        ?: throw IOException("cloud provider ID is missing")
+    val updatedConfig = JSONObject(config.toString())
+    val current = updatedConfig.optJSONArray("providers")
+        ?: throw IOException("cloud settings have no provider list")
+    val updated = JSONArray()
+    var replacedAuthRef: String? = null
+    var replacedProvider = false
+    for (index in 0 until current.length()) {
+        val existing = current.optJSONObject(index)
+            ?: throw IOException("cloud settings contain an invalid provider")
+        if (existing.optString("id") == providerId) {
+            replacedAuthRef = existing.optString("auth_ref").takeIf(String::isNotBlank)
+            updated.put(JSONObject(provider.toString()))
+            replacedProvider = true
+        } else {
+            updated.put(existing)
+        }
+    }
+    if (!replacedProvider) updated.put(JSONObject(provider.toString()))
+    updatedConfig.put("providers", updated)
+    return CloudProviderConfigUpdate(updatedConfig, replacedAuthRef)
+}
+
+fun removeCloudProviderConfig(config: JSONObject, providerId: String): CloudProviderConfigUpdate {
+    if (providerId.isBlank()) throw IOException("cloud provider ID is missing")
+    val updatedConfig = JSONObject(config.toString())
+    val current = updatedConfig.optJSONArray("providers")
+        ?: throw IOException("cloud settings have no provider list")
+    val updated = JSONArray()
+    for (index in 0 until current.length()) {
+        val existing = current.optJSONObject(index)
+            ?: throw IOException("cloud settings contain an invalid provider")
+        if (existing.optString("id") != providerId) updated.put(existing)
+    }
+    updatedConfig.put("providers", updated)
+    return CloudProviderConfigUpdate(updatedConfig)
+}
+
 fun parseCloudProviderSettings(value: JSONObject): CloudProviderSettings {
     val config = value.optJSONObject("config") ?: throw IOException("cloud settings have no config")
     if (value.optInt("schema_version") != 1) throw IOException("unsupported cloud settings version")
     val policy = value.optString("policy")
     if (policy !in setOf("local_only", "cloud_only", "prefer_local", "prefer_cloud")) {
         throw IOException("cloud settings have an invalid policy")
+    }
+    val providersJson = config.optJSONArray("providers")
+        ?: throw IOException("cloud settings have no provider list")
+    val providers = List(providersJson.length()) { index ->
+        val provider = providersJson.optJSONObject(index)
+            ?: throw IOException("cloud settings contain an invalid provider")
+        if (provider.has("credential") || provider.has("api_key") || provider.has("apiKey")) {
+            throw IOException("cloud provider settings must not contain credentials")
+        }
+        if (provider.optString("protocol") != "openai_chat_completions") {
+            throw IOException("cloud provider protocol is not supported on Android")
+        }
+        val modelsJson = provider.optJSONArray("models")
+            ?: throw IOException("cloud provider has no model list")
+        CloudProviderMetadata(
+            id = provider.requiredCloudString("id"),
+            baseUrl = provider.requiredCloudString("base_url"),
+            authRef = provider.requiredCloudString("auth_ref"),
+            enabled = provider.optBoolean("enabled"),
+            models = List(modelsJson.length()) { modelIndex ->
+                val model = modelsJson.optJSONObject(modelIndex)
+                    ?: throw IOException("cloud provider contains an invalid model")
+                val capabilitiesJson = model.optJSONArray("capabilities")
+                    ?: throw IOException("cloud model has no capabilities")
+                CloudModelMetadata(
+                    publicId = model.requiredCloudString("public_id"),
+                    upstreamId = model.requiredCloudString("upstream_id"),
+                    capabilities = List(capabilitiesJson.length()) { capabilityIndex ->
+                        capabilitiesJson.optString(capabilityIndex).takeIf(String::isNotBlank)
+                            ?: throw IOException("cloud model contains an invalid capability")
+                    }.toSet(),
+                )
+            },
+        )
     }
     return CloudProviderSettings(
         config = config,
@@ -90,8 +206,12 @@ fun parseCloudProviderSettings(value: JSONObject): CloudProviderSettings {
                 CloudNodeAuthorization(nodeUuid, certFingerprint)
             }
         }.orEmpty(),
+        providers = providers,
     )
 }
+
+private fun JSONObject.requiredCloudString(key: String): String = optString(key)
+    .takeIf(String::isNotBlank) ?: throw IOException("cloud provider metadata is missing $key")
 
 fun parseProxyStatus(engine: String, value: JSONObject): EngineProxyStatus {
     val ready = value.optBoolean("ready")

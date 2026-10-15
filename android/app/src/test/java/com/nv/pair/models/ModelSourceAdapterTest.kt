@@ -244,6 +244,30 @@ class ModelSourceAdapterTest {
     }
 
     @Test
+    fun inspectIncludesVisualArtifactsForVisualMnnModels() {
+        val revision = "a".repeat(40)
+        val transport = ModelHubHttpTransport { url, _ ->
+            if (url.host == "huggingface.test") {
+                """{"sha":"$revision","siblings":[{"rfilename":"config.json","lfs":{"oid":"${"a".repeat(64)}"}},{"rfilename":"llm_config.json","lfs":{"oid":"${"b".repeat(64)}"}},{"rfilename":"llm.mnn","lfs":{"oid":"${"c".repeat(64)}"}},{"rfilename":"llm.mnn.weight","lfs":{"oid":"${"d".repeat(64)}"}},{"rfilename":"tokenizer.txt","lfs":{"oid":"${"e".repeat(64)}"}},{"rfilename":"visual.mnn","lfs":{"oid":"${"f".repeat(64)}"}},{"rfilename":"visual.mnn.weight","lfs":{"oid":"${"0".repeat(64)}"}}]}"""
+            } else if (url.path.endsWith("/config.json")) {
+                """{"llm_model":"llm.mnn","llm_weight":"llm.mnn.weight","tokenizer_file":"tokenizer.txt"}"""
+            } else {
+                """{"is_visual":true}"""
+            }
+        }
+        val adapter = HuggingFaceAdapter("https://huggingface.test/api", transport = transport)
+        val summary = adapter.parseSearchResponse("""[{"id":"taobao-mnn/visual-model"}]""").single()
+
+        val inspected = adapter.inspect(summary)
+
+        assertEquals(
+            listOf("llm_config.json", "llm.mnn", "llm.mnn.weight", "tokenizer.txt", "visual.mnn", "visual.mnn.weight"),
+            inspected.requiredArtifactPaths,
+        )
+        assertEquals(ModelInstallability.VERIFIED_INSTALLABLE, inspected.installability())
+    }
+
+    @Test
     fun modelScopeInspectionResolvesBranchFromGitRefAdvertisement() {
         val commit = "c".repeat(40)
         val requests = mutableListOf<String>()
@@ -288,7 +312,8 @@ class ModelSourceAdapterTest {
         assertTrue(requests[1].contains(".git/info/refs?service=git-upload-pack"))
         assertEquals("application/x-git-upload-pack-advertisement", gitHeaders["Accept"])
         assertTrue(gitHeaders["User-Agent"].orEmpty().startsWith("git/"))
-        assertTrue(requests.last().contains("/resolve/$commit/config.json"))
+        assertTrue(requests.any { request -> request.contains("/resolve/$commit/config.json") })
+        assertTrue(requests.last().contains("/resolve/$commit/llm_config.json"))
     }
 
     @Test

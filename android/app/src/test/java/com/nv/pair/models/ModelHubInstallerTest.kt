@@ -124,6 +124,57 @@ class ModelHubInstallerTest {
     }
 
     @Test
+    fun successfulVisualModelInstallIncludesVisualArtifacts() {
+        val artifacts = visualMnnArtifacts()
+        val server = ArtifactServer(artifacts)
+        val root = Files.createTempDirectory("pair-visual-model-hub").toFile()
+        val descriptor = catalogDescriptor(artifacts).copy(
+            requiredArtifactPaths = listOf(
+                "llm_config.json", "llm.mnn", "llm.mnn.weight", "tokenizer.txt", "visual.mnn", "visual.mnn.weight",
+            ),
+        )
+        try {
+            ModelHubInstaller(root, ResumableModelDownloader(allowLoopbackHttpForTests = true))
+                .installMnnModel(descriptor, localHttpAdapter(server.port))
+
+            assertTrue(root.resolve("$INSTALLED_MODEL_ID/visual.mnn").isFile)
+            assertTrue(root.resolve("$INSTALLED_MODEL_ID/visual.mnn.weight").isFile)
+            assertEquals(7, server.requestedPaths.size)
+        } finally {
+            server.close()
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun installReplacesAnEarlierIncompleteModelPackage() {
+        val basicArtifacts = mnnArtifacts()
+        val visualArtifacts = visualMnnArtifacts()
+        val server = ArtifactServer(visualArtifacts, expectedRequests = 7)
+        val root = Files.createTempDirectory("pair-incomplete-model-repair").toFile()
+        val basicDescriptor = catalogDescriptor(basicArtifacts)
+        val visualDescriptor = catalogDescriptor(visualArtifacts).copy(
+            requiredArtifactPaths = listOf(
+                "llm_config.json", "llm.mnn", "llm.mnn.weight", "tokenizer.txt", "visual.mnn", "visual.mnn.weight",
+            ),
+        )
+        try {
+            val oldDirectory = root.resolve(INSTALLED_MODEL_ID)
+            oldDirectory.mkdirs()
+            basicArtifacts.forEach { (path, content) -> oldDirectory.resolve(path).writeBytes(content) }
+
+            ModelHubInstaller(root, ResumableModelDownloader(allowLoopbackHttpForTests = true))
+                .installMnnModel(visualDescriptor, localHttpAdapter(server.port))
+
+            assertTrue(oldDirectory.resolve("visual.mnn").isFile)
+            assertTrue(oldDirectory.resolve("visual.mnn.weight").isFile)
+        } finally {
+            server.close()
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun existingLegacyModelDirectoryRemainsUsableWithoutAutomaticRename() {
         val artifacts = mnnArtifacts()
         val server = ArtifactServer(artifacts)
@@ -339,6 +390,12 @@ class ModelHubInstallerTest {
         "llm.mnn" to "graph".toByteArray(),
         "llm.mnn.weight" to "weights".toByteArray(),
         "tokenizer.txt" to "tokens".toByteArray(),
+    )
+
+    private fun visualMnnArtifacts(): Map<String, ByteArray> = mnnArtifacts() + mapOf(
+        "llm_config.json" to "{\"is_visual\":true}".toByteArray(),
+        "visual.mnn" to "visual graph".toByteArray(),
+        "visual.mnn.weight" to "visual weights".toByteArray(),
     )
 
     private fun sha256(content: ByteArray): String = MessageDigest.getInstance("SHA-256")

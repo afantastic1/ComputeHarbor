@@ -29,6 +29,7 @@ import com.nv.pair.mnn.MnnRuntimeContainer
 import com.nv.pair.mnn.MnnErrorCode
 import com.nv.pair.mnn.MnnSettingsRepository
 import com.nv.pair.mnn.MnnBackend
+import com.nv.pair.mnn.MnnEngineState
 import com.nv.pair.mnn.BackendChoice
 import com.nv.pair.mnn.BackendCapability
 import com.nv.pair.mnn.EffectiveBackendSelection
@@ -49,6 +50,8 @@ import com.nv.pair.rpc.RouterApi
 import com.nv.pair.rpc.parseWorkloadRemoval
 import com.nv.pair.rpc.parseWorkloadUpsert
 import com.nv.pair.rpc.parseClusterMembersChanged
+import com.nv.pair.rpc.removeCloudProviderConfig
+import com.nv.pair.rpc.upsertCloudProviderConfig
 import com.nv.pair.runtime.RuntimePhase.CRASHED
 import com.nv.pair.runtime.RuntimePhase.RESTART_BACKOFF
 import com.nv.pair.runtime.RuntimePhase.RUNNING
@@ -117,6 +120,18 @@ class PairRuntimeService : Service() {
             ACTION_DELETE_MODEL -> serviceScope.launch { deleteInstalledModel(intent) }
             ACTION_CLOUD_ENABLED_CHANGED -> serviceScope.launch { updateCloudEnabled(intent.getBooleanExtra(EXTRA_CLOUD_ENABLED, false)) }
             ACTION_CLOUD_POLICY_CHANGED -> serviceScope.launch { updateCloudPolicy(intent.getStringExtra(EXTRA_CLOUD_POLICY).orEmpty()) }
+            ACTION_CLOUD_PROVIDER_SAVE -> serviceScope.launch {
+                updateCloudProvider(
+                    intent.getStringExtra(EXTRA_CLOUD_PROVIDER_JSON).orEmpty(),
+                    intent.getStringExtra(EXTRA_CLOUD_PROVIDER_CREDENTIAL).orEmpty(),
+                )
+            }
+            ACTION_CLOUD_PROVIDER_REMOVE -> serviceScope.launch {
+                removeCloudProvider(intent.getStringExtra(EXTRA_CLOUD_PROVIDER_ID).orEmpty())
+            }
+            ACTION_CLOUD_PROVIDER_TEST -> serviceScope.launch {
+                testCloudProvider(intent.getStringExtra(EXTRA_CLOUD_PROVIDER_ID).orEmpty())
+            }
             ACTION_CLUSTER_CREATE, ACTION_CLUSTER_INVITE, ACTION_CLUSTER_RESPOND,
             ACTION_CLUSTER_CANCEL, ACTION_CLUSTER_LEAVE, ACTION_CLUSTER_REMOVE ->
                 serviceScope.launch { performClusterAction(intent.action.orEmpty(), intent) }
@@ -257,7 +272,41 @@ class PairRuntimeService : Service() {
                         clusterRepository.setError("Cluster manager is unavailable; cluster features are disabled.")
                     }
                     withContext(Dispatchers.IO) { RouterApi(session).initializeWorkloads(routerRepository) }
-                    _cloudProviderSettings.value = withContext(Dispatchers.IO) { RouterApi(session).cloudProviderSettings() }
+                    _cloudProviderSettings.value = withContext(Dispatchers.IO) {
+                        val api = RouterApi(session)
+                        val settings = api.cloudProviderSettings()
+                        val credentialStore = CloudProviderCredentialStore(applicationContext)
+                        var configChanged = false
+                        val config = org.json.JSONObject(settings.config.toString())
+                        val persistedProviders = config.optJSONArray("providers") ?: org.json.JSONArray()
+                        val restoredProviders = org.json.JSONArray()
+                        settings.providers.forEach { provider ->
+                            val credential = credentialStore.get(provider.authRef)
+                            if (credential != null) {
+                                api.setCloudProviderCredential(provider.authRef, credential)
+                            } else if (provider.enabled) {
+                                configChanged = true
+                            }
+                            val rawProvider = (0 until persistedProviders.length())
+                                .mapNotNull(persistedProviders::optJSONObject)
+                                .firstOrNull { it.optString("id") == provider.id }
+                            if (rawProvider != null) {
+                                if (credential == null && provider.enabled) rawProvider.put("enabled", false)
+                                restoredProviders.put(rawProvider)
+                            }
+                        }
+                        if (configChanged) {
+                            config.put("providers", restoredProviders)
+                            api.updateCloudProviders(settings, config)
+                        }
+                        settings.copy(
+                            config = config,
+                            providers = settings.providers.map { provider ->
+                                provider.copy(credentialConfigured = credentialStore.get(provider.authRef) != null,
+                                    enabled = provider.enabled && credentialStore.get(provider.authRef) != null)
+                            },
+                        )
+                    }
                     setPhase(RUNNING, version = info.version, uptimeMillis = info.uptimeMillis)
                     val proxyMonitor = serviceScope.launch { monitorProxyStatus(session) }
                     try {
@@ -372,12 +421,20 @@ class PairRuntimeService : Service() {
                     available = false,
                     backend = _preferredMnnBackend.value,
                     errorCode = errorCode,
+                    engineState = health.state,
                 )
                 android.util.Log.w(TAG, "local MNN unavailable code=${errorCode.name.lowercase()}")
                 return false
             }
             mnnRuntimeContainer = container
-            _mnnLocalEngine.value = MnnLocalEngineStatus(available = true, backend = MnnBackend.CPU)
+            val runtimeStatus = withContext(Dispatchers.IO) { container.runtimeStatus() }
+            _mnnLocalEngine.value = MnnLocalEngineStatus(
+                available = true,
+                backend = MnnBackend.CPU,
+                errorCode = runtimeStatus.error?.code,
+                engineState = runtimeStatus.state,
+                modelId = runtimeStatus.modelId,
+            )
             _mnnCapabilities.value = MnnCapabilitySnapshot(
                 cpu = BackendCapability(MnnBackend.CPU, ProbeState.AVAILABLE, checkedAtEpochMillis = System.currentTimeMillis()),
                 openCl = BackendCapability(MnnBackend.OPENCL, ProbeState.CHECKING),
@@ -395,6 +452,7 @@ class PairRuntimeService : Service() {
                 available = false,
                 backend = _preferredMnnBackend.value,
                 errorCode = errorCode,
+                engineState = MnnEngineState.ERROR,
             )
             android.util.Log.w(TAG, "local MNN startup failed code=${errorCode.name.lowercase()}")
             return false
@@ -572,8 +630,10 @@ class PairRuntimeService : Service() {
                 }
                 _mnnLocalEngine.value = MnnLocalEngineStatus(
                     available = health.available,
-                    backend = container.preferredBackend(),
-                    errorCode = status.error?.code,
+                    backend = status.backend ?: container.preferredBackend(),
+                    errorCode = status.error?.code ?: health.error?.code,
+                    engineState = status.state,
+                    modelId = status.modelId,
                 )
                 if (previousHealth != health.available) reconcileBackendSelection()
             }
@@ -606,6 +666,89 @@ class PairRuntimeService : Service() {
             }
         }.onSuccess { _cloudProviderSettings.value = it }
             .onFailure { android.util.Log.w(TAG, "cloud routing policy update failed") }
+    }
+
+    private suspend fun updateCloudProvider(providerJson: String, credential: String) {
+        val session = activeSession.get() ?: return
+        runCatching {
+            withContext(Dispatchers.IO) {
+                val provider = org.json.JSONObject(providerJson)
+                val authRef = provider.optString("auth_ref")
+                val providerId = provider.optString("id")
+                require(authRef.isNotBlank() && providerId.isNotBlank())
+                val api = RouterApi(session)
+                val settings = api.cloudProviderSettings()
+                val store = CloudProviderCredentialStore(applicationContext)
+                if (credential.isNotEmpty()) {
+                    store.put(authRef, credential)
+                    api.setCloudProviderCredential(authRef, credential)
+                }
+                val update = upsertCloudProviderConfig(settings.config, provider)
+                val config = update.config
+                api.updateCloudProviders(settings, config)
+                if (update.replacedAuthRef != null && update.replacedAuthRef != authRef) {
+                    store.remove(update.replacedAuthRef)
+                }
+                settings.copy(config = config, providers = parseCloudProvidersForDisplay(config, store))
+            }
+        }.onSuccess { _cloudProviderSettings.value = it.copy(providerStatusMessage = "Provider saved.") }
+            .onFailure {
+                _cloudProviderSettings.value = _cloudProviderSettings.value?.copy(
+                    providerStatusMessage = "Provider could not be saved. Check the provider fields and API key.",
+                )
+                android.util.Log.w(TAG, "cloud provider save failed")
+            }
+    }
+
+    private suspend fun removeCloudProvider(providerId: String) {
+        val session = activeSession.get() ?: return
+        runCatching {
+            withContext(Dispatchers.IO) {
+                val api = RouterApi(session)
+                val settings = api.cloudProviderSettings()
+                val removed = settings.providers.firstOrNull { it.id == providerId }
+                    ?: return@withContext settings
+                val config = removeCloudProviderConfig(settings.config, providerId).config
+                api.updateCloudProviders(settings, config)
+                CloudProviderCredentialStore(applicationContext).remove(removed.authRef)
+                settings.copy(config = config, providers = settings.providers.filterNot { it.id == providerId })
+            }
+        }.onSuccess { _cloudProviderSettings.value = it.copy(providerStatusMessage = "Provider removed.") }
+            .onFailure {
+                _cloudProviderSettings.value = _cloudProviderSettings.value?.copy(
+                    providerStatusMessage = "Provider could not be removed. Try again.",
+                )
+                android.util.Log.w(TAG, "cloud provider removal failed")
+            }
+    }
+
+    private suspend fun testCloudProvider(providerId: String) {
+        val session = activeSession.get() ?: return
+        runCatching {
+            withContext(Dispatchers.IO) {
+                RouterApi(session).testCloudProvider(providerId)
+                _cloudProviderSettings.value?.copy(providerStatusMessage = "Connection test succeeded.")
+            }
+        }.onSuccess { updated ->
+            if (updated != null) _cloudProviderSettings.value = updated
+        }.onFailure {
+            _cloudProviderSettings.value = _cloudProviderSettings.value?.copy(
+                providerStatusMessage = "Connection test failed. Check the URL and API key.",
+            )
+        }
+    }
+
+    private fun parseCloudProvidersForDisplay(
+        config: org.json.JSONObject,
+        store: CloudProviderCredentialStore,
+    ): List<com.nv.pair.rpc.CloudProviderMetadata> {
+        val root = org.json.JSONObject()
+            .put("schema_version", 1)
+            .put("config", config)
+            .put("policy", "local_only")
+        return com.nv.pair.rpc.parseCloudProviderSettings(root).providers.map { provider ->
+            provider.copy(credentialConfigured = store.get(provider.authRef) != null)
+        }
     }
 
     private fun performClusterAction(action: String, intent: Intent) {
@@ -819,6 +962,12 @@ class PairRuntimeService : Service() {
         const val EXTRA_CLOUD_ENABLED = "com.nv.pair.extra.CLOUD_ENABLED"
         const val ACTION_CLOUD_POLICY_CHANGED = "com.nv.pair.action.CLOUD_POLICY_CHANGED"
         const val EXTRA_CLOUD_POLICY = "com.nv.pair.extra.CLOUD_POLICY"
+        const val ACTION_CLOUD_PROVIDER_SAVE = "com.nv.pair.action.CLOUD_PROVIDER_SAVE"
+        const val ACTION_CLOUD_PROVIDER_REMOVE = "com.nv.pair.action.CLOUD_PROVIDER_REMOVE"
+        const val ACTION_CLOUD_PROVIDER_TEST = "com.nv.pair.action.CLOUD_PROVIDER_TEST"
+        const val EXTRA_CLOUD_PROVIDER_JSON = "com.nv.pair.extra.CLOUD_PROVIDER_JSON"
+        const val EXTRA_CLOUD_PROVIDER_CREDENTIAL = "com.nv.pair.extra.CLOUD_PROVIDER_CREDENTIAL"
+        const val EXTRA_CLOUD_PROVIDER_ID = "com.nv.pair.extra.CLOUD_PROVIDER_ID"
         const val ACTION_CLUSTER_CREATE = "com.nv.pair.action.CLUSTER_CREATE"
         const val ACTION_CLUSTER_INVITE = "com.nv.pair.action.CLUSTER_INVITE"
         const val ACTION_CLUSTER_RESPOND = "com.nv.pair.action.CLUSTER_RESPOND"

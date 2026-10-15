@@ -31,6 +31,7 @@ class MnnEngineHost(
     private var state = MnnEngineState.UNLOADED
     private var loadedModel: MnnLoadedModel? = null
     private var activeRequestId: Long? = null
+    private var closeFuture: Future<*>? = null
     private var lastError: MnnError? = null
     private var metrics = MnnRuntimeMetrics()
     private var runtimeAvailable = true
@@ -237,9 +238,8 @@ class MnnEngineHost(
                 runCatching { runtime.cancel(requestId) }
                     .onFailure { warnShutdown("Could not cancel active MNN generation during shutdown.") }
             }
-            val closeFuture: Future<*> = synchronized(lifecycleLock) {
-                if (isClosed.get()) return
-                try {
+            val pendingClose: Future<*> = synchronized(lifecycleLock) {
+                closeFuture ?: try {
                     executor.submit {
                         if (isClosed.get()) return@submit
                         runtime.close()
@@ -254,22 +254,27 @@ class MnnEngineHost(
                             lastError = null
                             isClosed.set(true)
                         }
-                    }
+                    }.also { closeFuture = it }
                 } catch (failure: java.util.concurrent.RejectedExecutionException) {
                     throw closeFailure("MNN runtime executor rejected close.", failure)
                 }
             }
             try {
-                closeFuture.get(shutdownTimeoutMillis, TimeUnit.MILLISECONDS)
+                pendingClose.get(shutdownTimeoutMillis, TimeUnit.MILLISECONDS)
                 executor.shutdown()
             } catch (_: TimeoutException) {
-                throw closeFailure(
-                    "MNN shutdown exceeded ${shutdownTimeoutMillis}ms; native runtime may remain allocated until process exit."
-                )
+                executor.shutdown()
+                warnShutdown("MNN shutdown continues in the background after ${shutdownTimeoutMillis}ms.")
             } catch (_: InterruptedException) {
+                executor.shutdown()
                 Thread.currentThread().interrupt()
-                throw closeFailure("MNN shutdown was interrupted; native runtime may remain allocated until process exit.")
+                warnShutdown("MNN shutdown continues in the background after interruption.")
             } catch (failure: ExecutionException) {
+                synchronized(lifecycleLock) {
+                    if (closeFuture === pendingClose) {
+                        closeFuture = null
+                    }
+                }
                 throw closeFailure(
                     "MNN runtime close failed; native runtime may remain allocated until process exit.",
                     failure.cause ?: failure,
@@ -343,6 +348,9 @@ class MnnEngineHost(
 
     private companion object {
         const val TAG = "PAIR-MNN"
-        const val SHUTDOWN_TIMEOUT_MILLIS = 10_000L
+        // A native MNN prefill can take substantially longer than a UI stop
+        // request.  Return promptly after cancellation and let the daemon
+        // worker release native resources when that call unwinds.
+        const val SHUTDOWN_TIMEOUT_MILLIS = 1_000L
     }
 }

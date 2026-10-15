@@ -6,6 +6,7 @@
 package com.nv.pair.mnn
 
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.Semaphore
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
@@ -31,6 +32,8 @@ class LocalMnnInferenceService(
     private val backendSelection: MnnBackendSelection = MnnBackendSelection(),
 ) : MnnInferenceService, AutoCloseable {
     private val operationLock = ReentrantLock()
+    private val generationLock = ReentrantLock(true)
+    private val generationSlots = Semaphore(2, true)
     private val activeRequestId = AtomicReference<Long?>(null)
 
     override fun listModels(): List<MnnModelDescriptor> = catalog.listModels()
@@ -62,18 +65,30 @@ class LocalMnnInferenceService(
     ): MnnResult<MnnGenerationResult> {
         val validation = request.validate()
         if (validation is MnnResult.Failure) return validation
-        if (!activeRequestId.compareAndSet(null, requestId)) {
+        if (!generationSlots.tryAcquire()) {
             return MnnResult.failure(MnnErrorCode.ENGINE_BUSY, "An MNN generation is already active.")
         }
         return try {
-            when (val loaded = operationLock.withLock {
-                ensureLoadedLocked(request.modelId, backendSelection.current())
-            }) {
-                is MnnResult.Failure -> loaded
-                is MnnResult.Success -> host.generate(requestId, request, onToken)
+            try {
+                generationLock.lockInterruptibly()
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return MnnResult.failure(MnnErrorCode.CANCELLED, "MNN generation was cancelled while waiting for the engine.")
+            }
+            try {
+                activeRequestId.set(requestId)
+                when (val loaded = operationLock.withLock {
+                    ensureLoadedLocked(request.modelId, backendSelection.current())
+                }) {
+                    is MnnResult.Failure -> loaded
+                    is MnnResult.Success -> host.generate(requestId, request, onToken)
+                }
+            } finally {
+                activeRequestId.compareAndSet(requestId, null)
+                generationLock.unlock()
             }
         } finally {
-            activeRequestId.compareAndSet(requestId, null)
+            generationSlots.release()
         }
     }
 

@@ -104,8 +104,12 @@ enum class MnnChatRole(val wireName: String) {
 
 data class MnnChatMessage(
     val role: MnnChatRole,
-    val content: String
-)
+    val content: String,
+    val nativeJson: String? = null,
+) {
+    val nativeRole: String
+        get() = if (nativeJson != null) "json" else role.wireName
+}
 
 data class MnnChatRequest(
     val modelId: String,
@@ -113,7 +117,9 @@ data class MnnChatRequest(
     val maxTokens: Int = 128,
     val temperature: Float = 0.7f,
     val topP: Float = 0.9f,
-    val seed: Int? = null
+    val seed: Int? = null,
+    val toolsJson: String? = null,
+    val toolChoice: String? = null,
 ) {
     fun validate(): MnnResult<Unit> {
         if (!modelId.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}"))) {
@@ -122,7 +128,7 @@ data class MnnChatRequest(
         if (messages.isEmpty() || messages.none { it.role == MnnChatRole.USER }) {
             return MnnResult.failure(MnnErrorCode.INVALID_REQUEST, "Chat messages must include a user message.")
         }
-        if (messages.any { it.content.isBlank() }) {
+        if (messages.any { it.content.isBlank() && it.nativeJson == null }) {
             return MnnResult.failure(MnnErrorCode.INVALID_REQUEST, "Chat message content must not be empty.")
         }
         if (maxTokens !in 1..4096) {

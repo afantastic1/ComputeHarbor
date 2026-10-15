@@ -552,22 +552,34 @@ private fun inspectMnnPackage(
     val config = JSONObject(configText)
     val modelPath = config.optString("llm_model").takeIf(String::isNotBlank)
         ?: return descriptor.copy(source = descriptor.source.copy(revision = revision), files = files, compatibility = ModelCompatibility.INCOMPATIBLE)
-    val required = listOf(
-        config.optString("llm_config").ifBlank { "llm_config.json" },
+    val llmConfigPath = config.optString("llm_config").ifBlank { "llm_config.json" }
+    require(isSafeArtifactPath(llmConfigPath)) { "The model config contains an unsafe artifact path." }
+    val required = mutableListOf(
+        llmConfigPath,
         modelPath,
         config.optString("llm_weight").ifBlank { "llm.mnn.weight" },
         config.optString("tokenizer_file").ifBlank { "tokenizer.txt" },
-    ).distinct()
-    required.forEach { path -> require(isSafeArtifactPath(path)) { "The model config contains an unsafe artifact path." } }
+    )
     val filesByPath = files.associateBy(ModelFile::path)
-    val allPresent = required.all(filesByPath::containsKey)
+    val llmConfig = filesByPath[llmConfigPath]?.let { JSONObject(fetchText(llmConfigPath)) }
+    if (config.optBoolean("is_visual", llmConfig?.optBoolean("is_visual", false) ?: false)) {
+        required += config.optString("visual_model")
+            .ifBlank { llmConfig?.optString("visual_model").orEmpty() }
+            .ifBlank { "visual.mnn" }
+        required += config.optString("vision_weight")
+            .ifBlank { llmConfig?.optString("vision_weight").orEmpty() }
+            .ifBlank { "visual.mnn.weight" }
+    }
+    val requiredPaths = required.distinct()
+    requiredPaths.forEach { path -> require(isSafeArtifactPath(path)) { "The model config contains an unsafe artifact path." } }
+    val allPresent = requiredPaths.all(filesByPath::containsKey)
     val format = if (modelPath.endsWith(".mnn", ignoreCase = true)) ModelFormat.MNN else ModelFormat.UNKNOWN
     return descriptor.copy(
         source = descriptor.source.copy(revision = revision),
         files = files,
         format = format,
         compatibility = if (allPresent && format == ModelFormat.MNN) ModelCompatibility.COMPATIBLE else ModelCompatibility.INCOMPATIBLE,
-        requiredArtifactPaths = required,
+        requiredArtifactPaths = requiredPaths,
     )
 }
 

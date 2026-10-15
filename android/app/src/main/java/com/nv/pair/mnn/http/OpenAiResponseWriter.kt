@@ -57,6 +57,7 @@ object OpenAiResponseWriter {
         promptTokens: Int,
         generatedTokens: Int,
         finishReason: MnnFinishReason,
+        toolCalls: List<OpenAiToolCall> = emptyList(),
     ): JSONObject = JSONObject()
         .put("id", id)
         .put("object", "chat.completion")
@@ -65,8 +66,10 @@ object OpenAiResponseWriter {
         .put("choices", JSONArray().put(
             JSONObject()
                 .put("index", 0)
-                .put("message", JSONObject().put("role", "assistant").put("content", text))
-                .put("finish_reason", finishReason.wireName),
+                .put("message", JSONObject().put("role", "assistant")
+                    .put("content", text.takeIf(String::isNotBlank) ?: JSONObject.NULL)
+                    .apply { if (toolCalls.isNotEmpty()) put("tool_calls", toolCallsJson(toolCalls)) })
+                .put("finish_reason", if (toolCalls.isEmpty()) finishReason.wireName else "tool_calls"),
         ))
         .put("usage", JSONObject()
             .put("prompt_tokens", promptTokens)
@@ -89,6 +92,36 @@ object OpenAiResponseWriter {
                 .put("delta", JSONObject().put("content", content))
                 .put("finish_reason", finishReason?.wireName ?: JSONObject.NULL),
         ))
+
+    fun streamToolCallsChunk(id: String, model: String, toolCalls: List<OpenAiToolCall>): JSONObject =
+        JSONObject()
+            .put("id", id)
+            .put("object", "chat.completion.chunk")
+            .put("created", System.currentTimeMillis() / 1_000L)
+            .put("model", model)
+            .put("choices", JSONArray().put(
+                JSONObject()
+                    .put("index", 0)
+                    .put("delta", JSONObject().put("tool_calls", JSONArray().apply {
+                        toolCalls.forEachIndexed { index, call ->
+                            put(JSONObject()
+                                .put("index", index)
+                                .put("id", call.id)
+                                .put("type", "function")
+                                .put("function", JSONObject().put("name", call.name).put("arguments", call.arguments)))
+                        }
+                    }))
+                    .put("finish_reason", JSONObject.NULL),
+            ))
+
+    private fun toolCallsJson(toolCalls: List<OpenAiToolCall>): JSONArray = JSONArray().apply {
+        toolCalls.forEach { call ->
+            put(JSONObject()
+                .put("id", call.id)
+                .put("type", "function")
+                .put("function", JSONObject().put("name", call.name).put("arguments", call.arguments)))
+        }
+    }
 
     fun streamUsageChunk(
         id: String,

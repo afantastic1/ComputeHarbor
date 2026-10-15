@@ -9,7 +9,6 @@ import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -65,12 +64,11 @@ class MnnEngineHostTest {
         assertTrue(runtime.generationStarted.await(2, TimeUnit.SECONDS))
         val startedAt = System.nanoTime()
 
-        val closeFailure = runCatching { host.close() }.exceptionOrNull()
+        host.close()
 
         val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
         assertTrue("close took ${elapsedMillis}ms", elapsedMillis < 1_000)
-        assertTrue("timed out close must be reported", closeFailure is IllegalStateException)
-        assertTrue(warnings.single().contains("native runtime may remain allocated until process exit"))
+        assertTrue(warnings.single().contains("continues in the background"))
         runtime.releaseGeneration.countDown()
     }
 
@@ -88,24 +86,20 @@ class MnnEngineHostTest {
 
         val closeStarted = CountDownLatch(1)
         val closeFinished = CountDownLatch(1)
-        val closeFailure = AtomicReference<Throwable?>()
         val closeThread = Thread {
             closeStarted.countDown()
-            closeFailure.set(runCatching { host.close() }.exceptionOrNull())
+            host.close()
             closeFinished.countDown()
         }
         closeThread.start()
         assertTrue(closeStarted.await(2, TimeUnit.SECONDS))
         closeThread.interrupt()
 
-        assertTrue(closeFinished.await(2, TimeUnit.SECONDS))
-        assertTrue("interrupted close must be reported", closeFailure.get() is IllegalStateException)
+        assertTrue("interrupted close must return promptly", closeFinished.await(2, TimeUnit.SECONDS))
         assertFalse("host must stay unavailable until close succeeds", host.getHealth().available)
 
         runtime.releaseGeneration.countDown()
         assertTrue(generationFinished.await(2, TimeUnit.SECONDS))
-        host.close()
-
         assertEquals(MnnEngineState.UNLOADED, host.getStatus().state)
     }
 

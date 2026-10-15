@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstdint>
 #include <exception>
+#include <iomanip>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -88,6 +89,29 @@ std::string Utf16ToUtf8(JNIEnv* env, jstring value) {
     }
     env->ReleaseStringChars(value, chars);
     return result;
+}
+
+std::string EscapeJsonString(const std::string& value) {
+    std::ostringstream escaped;
+    for (const unsigned char character : value) {
+        switch (character) {
+            case '"': escaped << "\\\""; break;
+            case '\\': escaped << "\\\\"; break;
+            case '\b': escaped << "\\b"; break;
+            case '\f': escaped << "\\f"; break;
+            case '\n': escaped << "\\n"; break;
+            case '\r': escaped << "\\r"; break;
+            case '\t': escaped << "\\t"; break;
+            default:
+                if (character < 0x20) {
+                    escaped << "\\u00" << std::hex << std::setw(2) << std::setfill('0')
+                            << static_cast<int>(character) << std::dec << std::setfill(' ');
+                } else {
+                    escaped << static_cast<char>(character);
+                }
+        }
+    }
+    return escaped.str();
 }
 
 jstring Utf8ToJString(JNIEnv* env, const std::string& value) {
@@ -311,8 +335,25 @@ Java_com_nv_pair_mnn_NativeMnn_nativeLoadModel(JNIEnv* env, jobject, jlong handl
             return kLoadFailed;
         }
         const char* backendName = backend == 0 ? "cpu" : "opencl";
-        const std::string runtimeConfig = std::string("{\"backend_type\":\"") + backendName + "\"}";
-        if (!candidate->set_config(runtimeConfig)) {
+        std::ostringstream runtimeConfig;
+        runtimeConfig << "{\"backend_type\":\"" << backendName << "\"";
+        if (backend == 1) {
+            // Bound OpenCL prefill shapes so long agent prompts do not create one
+            // very large allocation on memory-constrained Android devices. MNN
+            // carries the KV state across chunks before decoding begins.
+            runtimeConfig << ",\"chunk\":128";
+            const size_t directoryEnd = path.find_last_of('/');
+            if (directoryEnd != std::string::npos && directoryEnd > 0) {
+                // OpenCL persists compiled kernels in tmp_path. Model directories
+                // live in PAIR's app-private storage and are writable; the process
+                // working directory is not a reliable Android cache location.
+                runtimeConfig << ",\"tmp_path\":\""
+                              << EscapeJsonString(path.substr(0, directoryEnd))
+                              << "\"";
+            }
+        }
+        runtimeConfig << "}";
+        if (!candidate->set_config(runtimeConfig.str())) {
             __android_log_print(ANDROID_LOG_ERROR, "PAIR-MNN", "MNN rejected runtime backend configuration.");
             return kLoadFailed;
         }
@@ -341,13 +382,16 @@ Java_com_nv_pair_mnn_NativeMnn_nativeGenerateChat(
     jlong requestId,
     jobjectArray roles,
     jobjectArray contents,
+    jstring toolsJson,
+    jstring toolChoice,
     jint maxTokens,
     jfloat temperature,
     jfloat topP,
     jlong seed,
     jobject callback) {
+    __android_log_print(ANDROID_LOG_INFO, "PAIR-MNN", "generation request=%lld entered native code", static_cast<long long>(requestId));
     Session* session = ToSession(handle);
-    if (session == nullptr || roles == nullptr || contents == nullptr || callback == nullptr || requestId <= 0 || maxTokens <= 0) {
+    if (session == nullptr || roles == nullptr || contents == nullptr || toolsJson == nullptr || toolChoice == nullptr || callback == nullptr || requestId <= 0 || maxTokens <= 0) {
         return kGenerationFailed;
     }
     const jsize messageCount = callerEnv->GetArrayLength(roles);
@@ -372,6 +416,15 @@ Java_com_nv_pair_mnn_NativeMnn_nativeGenerateChat(
             return kGenerationFailed;
         }
         chatMessages.emplace_back(std::move(roleUtf8), std::move(contentUtf8));
+    }
+    const std::string toolsJsonUtf8 = Utf16ToUtf8(callerEnv, toolsJson);
+    const std::string toolChoiceUtf8 = Utf16ToUtf8(callerEnv, toolChoice);
+    if (toolChoiceUtf8 == "required" || toolChoiceUtf8.rfind("function:", 0) == 0) {
+        std::string directive = "You must call one of the provided tools and return a tool call only.";
+        if (toolChoiceUtf8.rfind("function:", 0) == 0) {
+            directive += " You must call the function named " + toolChoiceUtf8.substr(9) + ".";
+        }
+        chatMessages.insert(chatMessages.begin(), {"system", directive});
     }
     std::unique_lock<std::mutex> generationGuard(session->generationMutex, std::try_to_lock);
     if (!generationGuard.owns_lock() || session->llm == nullptr) {
@@ -415,6 +468,19 @@ Java_com_nv_pair_mnn_NativeMnn_nativeGenerateChat(
         }
 
         auto started = std::chrono::steady_clock::now();
+        const auto logStage = [&](const char* stage) {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - started).count();
+            __android_log_print(
+                ANDROID_LOG_INFO,
+                "PAIR-MNN",
+                "generation request=%lld stage=%s elapsed_ms=%lld backend=%s",
+                static_cast<long long>(requestId),
+                stage,
+                static_cast<long long>(elapsed),
+                session->backend == 1 ? "opencl" : "cpu"
+            );
+        };
         CallbackStreamBuffer streamBuffer(env, callbackGlobal, onToken);
         std::ostream output(&streamBuffer);
         MNN::Transformer::Llm* llm = session->llm;
@@ -423,7 +489,8 @@ Java_com_nv_pair_mnn_NativeMnn_nativeGenerateChat(
             config << "{\"max_new_tokens\":" << maxTokens
                    << ",\"sampler_type\":\"" << (temperature <= 0.0f ? "greedy" : "topP") << "\""
                    << ",\"temperature\":" << temperature
-                   << ",\"top_p\":" << topP;
+                   << ",\"top_p\":" << topP
+                   << ",\"jinja\":{\"context\":{\"enable_thinking\":false}}";
             if (seed >= 0) {
                 config << ",\"seed\":" << seed;
             }
@@ -432,15 +499,28 @@ Java_com_nv_pair_mnn_NativeMnn_nativeGenerateChat(
                 result.store(kGenerationFailed);
                 return;
             }
+            logStage("config-ready");
             llm->reset_sampler(seed);
-            const std::string formattedPrompt = llm->apply_chat_template(chatMessages);
+            const std::string effectiveTools = toolChoiceUtf8 == "none" ? "[]" : toolsJsonUtf8;
+            const std::string formattedPrompt = llm->apply_chat_template(chatMessages, effectiveTools);
+            logStage("template-ready");
             const std::vector<int> inputIds = llm->tokenizer_encode(formattedPrompt);
             if (inputIds.empty()) {
                 result.store(kGenerationFailed);
                 return;
             }
+            __android_log_print(
+                    ANDROID_LOG_INFO,
+                    "PAIR-MNN",
+                    "request=%lld input_tokens=%zu max_new_tokens=%d backend=%s",
+                    static_cast<long long>(requestId),
+                    inputIds.size(),
+                    static_cast<int>(maxTokens),
+                    session->backend == 1 ? "opencl" : "cpu");
+            logStage("tokenization-ready");
 
             llm->generate_init(&output);
+            logStage("prefill-start");
             try {
                 llm->generate(inputIds, 0);
             } catch (const std::exception&) {
@@ -450,6 +530,7 @@ Java_com_nv_pair_mnn_NativeMnn_nativeGenerateChat(
                 result.store(session->backend == 1 ? kUnsupported : kGenerationFailed);
                 return;
             }
+            logStage("prefill-finished");
             if (streamBuffer.failed()) {
                 result.store(kGenerationFailed);
                 return;
@@ -460,6 +541,7 @@ Java_com_nv_pair_mnn_NativeMnn_nativeGenerateChat(
                     break;
                 }
                 try {
+                    if (tokenIndex == 0) logStage("first-token-start");
                     llm->generate(1);
                 } catch (const std::exception&) {
                     result.store(session->backend == 1 ? kUnsupported : kGenerationFailed);
@@ -468,6 +550,7 @@ Java_com_nv_pair_mnn_NativeMnn_nativeGenerateChat(
                     result.store(session->backend == 1 ? kUnsupported : kGenerationFailed);
                     break;
                 }
+                if (tokenIndex == 0) logStage("first-token-finished");
                 if (!streamBuffer.flush() || streamBuffer.failed()) {
                     result.store(kGenerationFailed);
                     break;
@@ -523,6 +606,7 @@ Java_com_nv_pair_mnn_NativeMnn_nativeGenerateChat(
         } catch (...) {
             result.store(kGenerationFailed);
         }
+        logStage("generation-finished");
     });
     worker.join();
     callerEnv->DeleteGlobalRef(callbackGlobal);

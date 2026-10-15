@@ -115,4 +115,27 @@ class MnnModelManagerTest {
         assertTrue(error.message.contains("llm_config.json"))
         modelDirectory.deleteRecursively()
     }
+
+    @Test
+    fun rejectsVisualModelWhenVisualArtifactsAreMissing() {
+        val modelDirectory = Files.createTempDirectory("pair-mnn-model").toFile()
+        modelDirectory.resolve("config.json").writeText(
+            "{\"llm_model\":\"llm.mnn\",\"llm_weight\":\"llm.mnn.weight\",\"tokenizer_file\":\"tokenizer.txt\"}"
+        )
+        modelDirectory.resolve("llm_config.json").writeText("{\"is_visual\":true}")
+        modelDirectory.resolve("llm.mnn").writeText("synthetic model file")
+        modelDirectory.resolve("llm.mnn.weight").writeText("synthetic model weights")
+        modelDirectory.resolve("tokenizer.txt").writeText("synthetic tokenizer")
+
+        val result = MnnModelManager().resolve(modelDirectory, "qwen-visual-test")
+
+        assertTrue(result is MnnResult.Failure)
+        val error = when (result) {
+            is MnnResult.Failure -> result.error
+            is MnnResult.Success -> error("Expected incomplete visual model to fail")
+        }
+        assertEquals(MnnErrorCode.MODEL_CONFIG_INVALID, error.code)
+        assertTrue(error.message.contains("visual.mnn"))
+        modelDirectory.deleteRecursively()
+    }
 }

@@ -77,6 +77,38 @@ class PeerRelationshipResolverTest {
     }
 
     @Test
+    fun sameDisplayNameWithDifferentStableUuidsRemainsTwoInviteCandidates() {
+        val peers = buildPeerViews(
+            listOf(
+                PairNode(id = "desktop-a", name = "Studio", hostUuid = "uuid-a", ipAddress = "192.0.2.8"),
+                PairNode(id = "desktop-b", name = "Studio", hostUuid = "uuid-b", ipAddress = "192.0.2.9"),
+            ),
+            clusteredState(),
+            loaded = true,
+        )
+
+        assertEquals(2, peers.size)
+        assertEquals(setOf("uuid-a", "uuid-b"), peers.mapNotNull { it.nodeUuid }.toSet())
+        assertTrue(peers.all { it.status == PeerRelationshipStatus.DISCOVERED_UNPAIRED && it.canInvite })
+    }
+
+    @Test
+    fun duplicateStableUuidIsShownAsInconsistentAndCannotBeInvited() {
+        val peers = buildPeerViews(
+            listOf(
+                PairNode(id = "desktop-a", name = "Studio", hostUuid = "duplicate-uuid", ipAddress = "192.0.2.8"),
+                PairNode(id = "desktop-b", name = "Other label", hostUuid = "duplicate-uuid", ipAddress = "192.0.2.9"),
+            ),
+            clusteredState(),
+            loaded = true,
+        )
+
+        assertEquals(1, peers.size)
+        assertEquals(PeerRelationshipStatus.INCONSISTENT, peers.single().status)
+        assertFalse(peers.single().canInvite)
+    }
+
+    @Test
     fun inviteDecisionRejectsExistingMemberAndMissingStableIdentity() {
         val state = clusteredState(members = listOf(
             ClusterMember(id = "pc", nodeUuid = "pc-uuid", clusterId = "cluster-a"),

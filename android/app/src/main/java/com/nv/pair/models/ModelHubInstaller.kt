@@ -70,7 +70,15 @@ class ModelHubInstaller(
         val modelId = installedModelId(descriptor)
         val target = File(modelRoot, modelId)
         require(target.canonicalFile.parentFile == modelRoot.canonicalFile) { "Model target must stay inside the private model root." }
-        if (target.exists()) return recoverPublishedInstall(target, descriptor, modelId)
+        if (target.exists()) {
+            try {
+                return recoverPublishedInstall(target, descriptor, modelId)
+            } catch (failure: IOException) {
+                if (!target.deleteRecursively()) {
+                    throw IOException("The incomplete installed model could not be replaced.", failure)
+                }
+            }
+        }
         resolveLegacyInstall(descriptor)?.let { return it }
         val staging = File(modelRoot, ".$modelId.downloading")
         require(staging.canonicalFile.parentFile == modelRoot.canonicalFile) { "Model staging directory must stay inside the private model root." }
@@ -80,6 +88,12 @@ class ModelHubInstaller(
             val allArtifacts = resolveRequiredArtifacts(staging, descriptor, requireConfig = false)
             val config = allArtifacts.first()
             downloadArtifact(descriptor, adapter, staging, task, config, 0L, null, onProgress)
+            val llmConfigPath = JSONObject(File(staging, CONFIG_FILE).readText())
+                .optString("llm_config")
+                .ifBlank { DEFAULT_LLM_CONFIG_FILE }
+            val llmConfig = allArtifacts.firstOrNull { it.path == llmConfigPath }
+                ?: throw IOException("The catalog entry is missing the configured MNN LLM config.")
+            downloadArtifact(descriptor, adapter, staging, task, llmConfig, config.sizeBytes ?: 0L, null, onProgress)
             val resolvedArtifacts = resolveRequiredArtifacts(staging, descriptor)
             val totalBytes = resolvedArtifacts.map(ModelFile::sizeBytes).takeIf { sizes -> sizes.all { it != null } }
                 ?.sumOf { it ?: 0L }
@@ -195,7 +209,7 @@ class ModelHubInstaller(
         } catch (_: JSONException) {
             throw IOException("The model config is not valid JSON.")
         }
-        val requiredArtifacts = requiredArtifactNames(configJson).map { name ->
+        val requiredArtifacts = requiredArtifactNames(root, configJson).map { name ->
             descriptor.files.firstOrNull { it.path == name }
                 ?: throw IOException("The catalog entry is missing a required MNN artifact: $name.")
         }
@@ -558,13 +572,35 @@ class ModelHubInstaller(
         }
     }
 
-    private fun requiredArtifactNames(config: JSONObject): List<String> = listOf(
-        config.optString("llm_config").ifBlank { DEFAULT_LLM_CONFIG_FILE },
-        config.optString("llm_model").ifBlank { DEFAULT_MODEL_FILE },
-        config.optString("llm_weight").ifBlank { DEFAULT_WEIGHT_FILE },
-        config.optString("tokenizer_file").ifBlank { DEFAULT_TOKENIZER_FILE },
-    ).onEach { name -> require(isSafeRelativePath(name)) { "MNN config artifact paths must stay inside the model directory." } }
-        .distinct()
+    private fun requiredArtifactNames(root: File, config: JSONObject): List<String> {
+        val llmConfigPath = config.optString("llm_config").ifBlank { DEFAULT_LLM_CONFIG_FILE }
+        require(isSafeRelativePath(llmConfigPath)) { "MNN config artifact paths must stay inside the model directory." }
+        val required = mutableListOf(
+            llmConfigPath,
+            config.optString("llm_model").ifBlank { DEFAULT_MODEL_FILE },
+            config.optString("llm_weight").ifBlank { DEFAULT_WEIGHT_FILE },
+            config.optString("tokenizer_file").ifBlank { DEFAULT_TOKENIZER_FILE },
+        )
+        val llmConfigFile = File(root, llmConfigPath)
+        if (llmConfigFile.isFile) {
+            val llmConfig = try {
+                JSONObject(llmConfigFile.readText())
+            } catch (_: JSONException) {
+                throw IOException("The MNN LLM config is not valid JSON.")
+            }
+            if (config.optBoolean("is_visual", llmConfig.optBoolean("is_visual", false))) {
+                required += config.optString("visual_model")
+                    .ifBlank { llmConfig.optString("visual_model") }
+                    .ifBlank { DEFAULT_VISUAL_MODEL_FILE }
+                required += config.optString("vision_weight")
+                    .ifBlank { llmConfig.optString("vision_weight") }
+                    .ifBlank { DEFAULT_VISUAL_WEIGHT_FILE }
+            }
+        }
+        return required.onEach { name ->
+            require(isSafeRelativePath(name)) { "MNN config artifact paths must stay inside the model directory." }
+        }.distinct()
+    }
 
     private fun installedSha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
@@ -605,6 +641,8 @@ class ModelHubInstaller(
         const val DEFAULT_MODEL_FILE = "llm.mnn"
         const val DEFAULT_WEIGHT_FILE = "llm.mnn.weight"
         const val DEFAULT_TOKENIZER_FILE = "tokenizer.txt"
+        const val DEFAULT_VISUAL_MODEL_FILE = "visual.mnn"
+        const val DEFAULT_VISUAL_WEIGHT_FILE = "visual.mnn.weight"
         const val PROVENANCE_FILE = ".pair-model.json"
         const val DOWNLOAD_TASK_FILE = ".pair-download.json"
         const val LEGACY_DOWNLOAD_TASK_SCHEMA_VERSION = 1

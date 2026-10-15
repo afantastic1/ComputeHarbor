@@ -9,7 +9,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-val useOpenClMnn = project.findProperty("pairMnnOpenCL")?.toString()?.equals("true", ignoreCase = true) == true
+val useOpenClMnn = project.findProperty("pairMnnOpenCL")?.toString()?.equals("false", ignoreCase = true) != true
 val mnnRuntimeVariant = if (useOpenClMnn) "opencl" else "cpu"
 
 android {

@@ -39,3 +39,86 @@ index 68f6ff5..b7bf67d 100644
 +    void setSeed(unsigned int seed) { mRng.seed(seed); }
  private:
      std::shared_ptr<LlmContext> mContext;
+
+diff --git a/transformers/llm/engine/include/llm/llm.hpp b/transformers/llm/engine/include/llm/llm.hpp
+index 1124f4d..43ec88a 100644
+--- a/transformers/llm/engine/include/llm/llm.hpp
++++ b/transformers/llm/engine/include/llm/llm.hpp
+@@ -188,6 +188,7 @@ public:
+     std::string apply_chat_template(const std::string& user_content) const;
+     std::string apply_chat_template(const ChatMessages& chat_prompts) const;
++    std::string apply_chat_template(const ChatMessages& chat_prompts, const std::string& tools_json) const;
+     void response(const MultimodalPrompt& multimodal_input,
+                   std::ostream* os = &std::cout,
+                   const char* end_with = nullptr,
+
+diff --git a/transformers/llm/engine/src/llm.cpp b/transformers/llm/engine/src/llm.cpp
+index 87f2f12..30fb989 100644
+--- a/transformers/llm/engine/src/llm.cpp
++++ b/transformers/llm/engine/src/llm.cpp
+@@ -967,6 +967,10 @@ std::string Llm::apply_chat_template(const ChatMessages& chat_prompts) const {
+     return mTokenizer->apply_chat_template(chat_prompts, true);
+ }
++
++std::string Llm::apply_chat_template(const ChatMessages& chat_prompts, const std::string& tools_json) const {
++    return mTokenizer->apply_chat_template(chat_prompts, true, tools_json);
++}
+ 
+ std::vector<int> Llm::tokenizer_encode(const std::string& user_content) {
+     return mTokenizer->encode(user_content);
+
+diff --git a/transformers/llm/engine/src/tokenizer/tokenizer.hpp b/transformers/llm/engine/src/tokenizer/tokenizer.hpp
+index 4cc125d..8e661f3 100644
+--- a/transformers/llm/engine/src/tokenizer/tokenizer.hpp
++++ b/transformers/llm/engine/src/tokenizer/tokenizer.hpp
+@@ -150,6 +150,7 @@ public:
+     virtual std::string decode(const std::vector<int>& ids);
+     // chat template
+     std::string apply_chat_template(const ChatMessages& messages, bool add_generation_prompt = true) const;
++    std::string apply_chat_template(const ChatMessages& messages, bool add_generation_prompt, const std::string& tools_json) const;
+     std::string apply_chat_template(const std::string& user_content, const std::string& system_prompt = "") const;
+     void set_chat_template(const std::string& tpl, const std::string& eos = "", const std::string& context = "");
+     void set_chat_template_context(const std::string& context_json);
+
+diff --git a/transformers/llm/engine/src/tokenizer/tokenizer.cpp b/transformers/llm/engine/src/tokenizer/tokenizer.cpp
+index 0b397e9..b939028 100644
+--- a/transformers/llm/engine/src/tokenizer/tokenizer.cpp
++++ b/transformers/llm/engine/src/tokenizer/tokenizer.cpp
+@@ -1025,0 +1026,36 @@
++
++std::string Tokenizer::apply_chat_template(
++    const ChatMessages& messages, bool add_generation_prompt, const std::string& tools_json) const {
++    if (chat_template_.empty()) return apply_chat_template(messages, add_generation_prompt);
++#ifdef LLM_USE_JINJA
++    jinja::json tools = jinja::json::parse(tools_json.empty() ? "[]" : tools_json);
++    if (!tools.is_array()) return apply_chat_template(messages, add_generation_prompt);
++    jinja::json default_ctx = jinja::json::object();
++    default_ctx["eos_token"] = chat_template_eos_;
++    if (!chat_template_bos_.empty()) default_ctx["bos_token"] = chat_template_bos_;
++    jinja::Template tpl(chat_template_, default_ctx);
++    jinja::json msgs = jinja::json::array();
++    for (const auto& m : messages) {
++        if (m.first == "json") {
++            auto parsed = jinja::json::parse(m.second);
++            if (parsed.is_object()) {
++                msgs.push_back(std::move(parsed));
++                continue;
++            }
++        }
++        jinja::json msg = jinja::json::object();
++        msg["role"] = m.first;
++        msg["content"] = m.second;
++        msgs.push_back(std::move(msg));
++    }
++    jinja::json extra_ctx = jinja::json::object();
++    if (!chat_template_context_.empty()) {
++        auto parsed = jinja::json::parse(chat_template_context_);
++        if (parsed.is_object()) extra_ctx = std::move(parsed);
++    }
++    return tpl.apply_chat_template(msgs, add_generation_prompt, tools, extra_ctx);
++#else
++    (void)tools_json;
++    return apply_chat_template(messages, add_generation_prompt);
++#endif
++}
+ 

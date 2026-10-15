@@ -35,7 +35,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.nv.pair.data.PairNode
 import com.nv.pair.mnn.MnnBackend
@@ -45,7 +48,10 @@ import com.nv.pair.mnn.MnnCapabilitySnapshot
 import com.nv.pair.mnn.ProbeReason
 import com.nv.pair.mnn.ProbeState
 import com.nv.pair.runtime.MnnLocalEngineStatus
+import com.nv.pair.mnn.MnnEngineState
 import com.nv.pair.rpc.CloudProviderSettings
+import org.json.JSONArray
+import org.json.JSONObject
 
 @Composable
 fun ModelHubScreen(
@@ -62,14 +68,29 @@ fun ModelHubScreen(
     cloudProviderSettings: CloudProviderSettings?,
     onCloudEnabledChange: (Boolean) -> Unit,
     onCloudPolicyChange: (String) -> Unit,
+    onSaveCloudProvider: (JSONObject, String) -> Unit = { _, _ -> },
+    onRemoveCloudProvider: (String) -> Unit = {},
+    onTestCloudProvider: (String) -> Unit = {},
 ) {
     val modelHubViewModel: ModelHubViewModel = viewModel()
     val hubState by modelHubViewModel.state.collectAsStateWithLifecycle()
     var source by remember { mutableStateOf(ModelSourceKind.MODELSCOPE) }
     var query by remember { mutableStateOf("") }
+    val compactLayout = LocalConfiguration.current.screenWidthDp <= 360 ||
+        LocalDensity.current.fontScale >= 1.3f
     var importModelId by remember { mutableStateOf("") }
     var pendingDelete by remember { mutableStateOf<ModelDescriptor?>(null) }
     var pendingUnverifiedInstall by remember { mutableStateOf<ModelDescriptor?>(null) }
+    var editingProvider by remember { mutableStateOf<com.nv.pair.rpc.CloudProviderMetadata?>(null) }
+    var providerId by remember { mutableStateOf("") }
+    var providerBaseUrl by remember { mutableStateOf("") }
+    var providerPublicModelId by remember { mutableStateOf("") }
+    var providerUpstreamModelId by remember { mutableStateOf("") }
+    var providerCredential by remember { mutableStateOf("") }
+    var providerEnabled by remember { mutableStateOf(true) }
+    var providerToolsEnabled by remember { mutableStateOf(false) }
+    var providerFormError by remember { mutableStateOf("") }
+    var providerDialogOpen by remember { mutableStateOf(false) }
     val catalogFailureIsRetryable = when (val phase = hubState.catalogPhase) {
         is CatalogPhase.Failed -> phase.failure.retryable
         CatalogPhase.Idle, CatalogPhase.Searching -> false
@@ -83,10 +104,15 @@ fun ModelHubScreen(
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("Model Hub", style = MaterialTheme.typography.headlineMedium)
+        Text("Models", style = MaterialTheme.typography.headlineMedium)
         Text(
-            "Search model catalogs, install verified MNN models to this device, or import files from local storage.",
+            "Manage MNN models on this device, browse verified downloads, and inspect models available through the PAIR network.",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OnDeviceMnnModelsSection(
+            installedModels = hubState.installedModels,
+            localEngineStatus = localEngineStatus,
+            onDelete = { pendingDelete = it },
         )
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -97,8 +123,10 @@ fun ModelHubScreen(
                 )
                 Text("Selection mode: ${if (backendChoice == BackendChoice.Auto) "Automatic" else "Manual"}")
                 Text(
-                    if (effectiveBackendSelection.resolving) {
+                    if (effectiveBackendSelection.resolving && serviceRunning) {
                         "Effective engine: CPU (temporary while checking)"
+                    } else if (effectiveBackendSelection.resolving) {
+                        "Effective engine: CPU fallback (OpenCL not checked)"
                     } else {
                         "Effective engine: ${effectiveBackendSelection.effectiveBackend.name}"
                     },
@@ -141,7 +169,7 @@ fun ModelHubScreen(
         }
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Catalog", style = MaterialTheme.typography.titleLarge)
+                Text("Browse / Install", style = MaterialTheme.typography.titleLarge)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     SourceChoice("ModelScope", source == ModelSourceKind.MODELSCOPE) {
                         source = ModelSourceKind.MODELSCOPE
@@ -219,44 +247,38 @@ fun ModelHubScreen(
                         },
                     )
                 }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedTextField(
-                        value = importModelId,
-                        onValueChange = { importModelId = it },
-                        label = { Text("Local model ID") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                    OutlinedButton(
-                        enabled = !hubState.isBusy && importModelId.isNotBlank(),
-                        onClick = { importPicker.launch(arrayOf("*/*")) },
-                    ) {
-                        Text("Import MNN files")
-                    }
-                }
-            }
-        }
-
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Installed on this device", style = MaterialTheme.typography.titleLarge)
-                if (hubState.installedModels.isEmpty()) {
-                    Text("No MNN models are installed.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    hubState.installedModels.forEach { model ->
-                        Row(
+                if (compactLayout) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        OutlinedTextField(
+                            value = importModelId,
+                            onValueChange = { importModelId = it },
+                            label = { Text("Local model ID") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("local_model_id_input"),
+                        )
+                        OutlinedButton(
+                            enabled = !hubState.isBusy && importModelId.isNotBlank(),
+                            onClick = { importPicker.launch(arrayOf("*/*")) },
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(model.displayName, style = MaterialTheme.typography.titleMedium)
-                                Text(model.engineModelId, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(formatBytes(model.estimatedMemoryBytes), style = MaterialTheme.typography.bodySmall)
-                            }
-                            OutlinedButton(onClick = { pendingDelete = model }) { Text("Delete") }
+                            Text("Import MNN files")
                         }
-                        HorizontalDivider()
+                    }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        OutlinedTextField(
+                            value = importModelId,
+                            onValueChange = { importModelId = it },
+                            label = { Text("Local model ID") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f).testTag("local_model_id_input"),
+                        )
+                        OutlinedButton(
+                            enabled = !hubState.isBusy && importModelId.isNotBlank(),
+                            onClick = { importPicker.launch(arrayOf("*/*")) },
+                        ) {
+                            Text("Import MNN files")
+                        }
                     }
                 }
             }
@@ -264,14 +286,14 @@ fun ModelHubScreen(
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("PAIR runtime inventory", style = MaterialTheme.typography.titleLarge)
+                Text("Available via Network", style = MaterialTheme.typography.titleLarge)
                 Text("Models advertised by the PAIR gateway are available to local API clients.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 val inventory = remember(nodes) { ModelInventoryRepository().fromNetwork(nodes) }
                 if (inventory.isEmpty()) {
                     Text("No models are currently available in the PAIR network.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
                     inventory.forEach { item ->
-                        Text("${item.modelId} · ${item.engine} · ${item.nodeId}${if (item.loaded) " · loaded" else ""}")
+                        Text("${item.modelId} · ${item.engine} · ${item.nodeId}${if (item.loaded) " · Loaded" else " · Installed"}")
                     }
                 }
             }
@@ -327,16 +349,68 @@ fun ModelHubScreen(
                         }
                     }
                 }
+                Text("OpenAI-compatible providers", style = MaterialTheme.typography.titleMedium)
+                cloudProviderSettings?.providers.orEmpty().forEach { provider ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(provider.id)
+                            Text(
+                                if (provider.credentialConfigured) "API key saved on this device" else "API key required",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Text(provider.baseUrl, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                        }
+                        TextButton(onClick = {
+                            providerDialogOpen = true
+                            editingProvider = provider
+                            providerId = provider.id
+                            providerBaseUrl = provider.baseUrl
+                            providerPublicModelId = provider.models.firstOrNull()?.publicId.orEmpty()
+                            providerUpstreamModelId = provider.models.firstOrNull()?.upstreamId.orEmpty()
+                            providerCredential = ""
+                            providerEnabled = provider.enabled
+                            providerToolsEnabled = provider.models.any { "tools" in it.capabilities }
+                            providerFormError = ""
+                        }) { Text("Edit") }
+                        TextButton(onClick = { onRemoveCloudProvider(provider.id) }) { Text("Remove") }
+                        TextButton(
+                            enabled = provider.credentialConfigured && serviceRunning,
+                            onClick = { onTestCloudProvider(provider.id) },
+                        ) { Text("Test") }
+                    }
+                }
+                OutlinedButton(
+                    enabled = cloudProviderSettings != null && serviceRunning,
+                    onClick = {
+                        providerDialogOpen = true
+                        editingProvider = null
+                        providerId = ""
+                        providerBaseUrl = "https://"
+                        providerPublicModelId = ""
+                        providerUpstreamModelId = ""
+                        providerCredential = ""
+                        providerEnabled = true
+                        providerToolsEnabled = false
+                        providerFormError = ""
+                    },
+                ) { Text("Add OpenAI-compatible provider") }
+                cloudProviderSettings?.providerStatusMessage?.let { status ->
+                    Text(
+                        status,
+                        color = if (status.contains("succeeded")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    )
+                }
                 if (cloudModels.isEmpty()) {
                     Text(
-                        "No Cloud models are configured on this device. Provider setup and credentials are managed on the host that owns them.",
+                        "No Cloud models are configured on this device.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
                     cloudModels.forEach { Text(it) }
                 }
                 Text(
-                    "Requests run on the host that holds the Provider key. This device never receives that key; the host must authorize this paired node.",
+                    "This device's provider keys stay here and are never sent to paired nodes. A remote host keeps its own Provider key and must authorize this device.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -395,6 +469,140 @@ fun ModelHubScreen(
             },
             dismissButton = { TextButton(onClick = { pendingUnverifiedInstall = null }) { Text("Cancel") } },
         )
+    }
+
+    if (cloudProviderSettings != null && providerDialogOpen) {
+        AlertDialog(
+            onDismissRequest = {
+                providerDialogOpen = false
+                editingProvider = null
+                providerCredential = ""
+                providerBaseUrl = ""
+            },
+            title = { Text(if (editingProvider == null) "Add cloud provider" else "Edit ${editingProvider?.id}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        providerId,
+                        { providerId = it },
+                        label = { Text("Provider ID") },
+                        singleLine = true,
+                        readOnly = editingProvider != null,
+                    )
+                    OutlinedTextField(providerBaseUrl, { providerBaseUrl = it }, label = { Text("OpenAI-compatible base URL") }, singleLine = true)
+                    OutlinedTextField(providerPublicModelId, { providerPublicModelId = it }, label = { Text("PAIR model ID (cloud/provider/model)") }, singleLine = true)
+                    OutlinedTextField(providerUpstreamModelId, { providerUpstreamModelId = it }, label = { Text("Provider model ID") }, singleLine = true)
+                    OutlinedTextField(
+                        providerCredential,
+                        { providerCredential = it },
+                        label = { Text(if (editingProvider?.credentialConfigured == true) "Replace API key (leave blank to keep)" else "API key") },
+                        singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Enabled", Modifier.weight(1f))
+                        Switch(providerEnabled, { providerEnabled = it })
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Advertise tools capability", Modifier.weight(1f))
+                        Switch(providerToolsEnabled, { providerToolsEnabled = it })
+                    }
+                    if (providerFormError.isNotBlank()) Text(providerFormError, color = MaterialTheme.colorScheme.error)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val cleanId = providerId.trim()
+                    val baseUrl = providerBaseUrl.trim().trimEnd('/')
+                    val publicId = providerPublicModelId.trim()
+                    val upstreamId = providerUpstreamModelId.trim()
+                    val credentialReady = providerCredential.isNotBlank() || editingProvider?.credentialConfigured == true
+                    if (!cleanId.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")) ||
+                        !baseUrl.startsWith("https://") || publicId.isBlank() || upstreamId.isBlank() || !credentialReady) {
+                        providerFormError = "Enter a valid provider ID, HTTPS URL, model IDs, and API key."
+                    } else if (!publicId.startsWith("cloud/$cleanId/")) {
+                        providerFormError = "PAIR model ID must start with cloud/$cleanId/."
+                    } else {
+                        val capabilities = JSONArray().put("chat").put("streaming").also { values ->
+                            if (providerToolsEnabled) values.put("tools")
+                        }
+                        val provider = JSONObject()
+                            .put("id", cleanId)
+                            .put("protocol", "openai_chat_completions")
+                            .put("base_url", baseUrl)
+                            .put("auth_ref", "android:$cleanId")
+                            .put("enabled", providerEnabled)
+                            .put("models", JSONArray().put(JSONObject()
+                                .put("public_id", publicId)
+                                .put("upstream_id", upstreamId)
+                                .put("capabilities", capabilities)))
+                        onSaveCloudProvider(provider, providerCredential)
+                        providerCredential = ""
+                        providerDialogOpen = false
+                        editingProvider = null
+                        providerBaseUrl = ""
+                    }
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    providerDialogOpen = false
+                    editingProvider = null
+                    providerCredential = ""
+                    providerBaseUrl = ""
+                }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+@Composable
+internal fun OnDeviceMnnModelsSection(
+    installedModels: List<ModelDescriptor>,
+    localEngineStatus: MnnLocalEngineStatus,
+    onDelete: (ModelDescriptor) -> Unit,
+) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("On-device Models - MNN", style = MaterialTheme.typography.titleLarge)
+            if (installedModels.isEmpty()) {
+                Text("No MNN models are installed.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                installedModels.forEach { model ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(model.displayName, style = MaterialTheme.typography.titleMedium)
+                            Text(model.engineModelId, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            val isLoaded = localEngineStatus.modelId == model.engineModelId &&
+                                localEngineStatus.engineState in setOf(MnnEngineState.READY, MnnEngineState.GENERATING)
+                            val loadFailed = localEngineStatus.modelId == model.engineModelId &&
+                                localEngineStatus.engineState == MnnEngineState.ERROR
+                            Text(
+                                when {
+                                    isLoaded -> "Loaded on this device"
+                                    loadFailed -> "Load failed - see diagnostics"
+                                    else -> "Installed - not loaded"
+                                },
+                                color = if (loadFailed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Text(formatBytes(model.estimatedMemoryBytes), style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                "Tool Calling · Unsupported",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        OutlinedButton(onClick = { onDelete(model) }) { Text("Delete") }
+                    }
+                    HorizontalDivider()
+                }
+            }
+        }
     }
 }
 

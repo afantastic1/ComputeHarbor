@@ -111,7 +111,6 @@ class OpenAiRequestParserTest {
     @Test
     fun explicitlyRejectsUnsupportedCapabilities() {
         listOf(
-            """{"model":"m","messages":[{"role":"user","content":"x"}],"tools":[]}""",
             """{"model":"m","messages":[{"role":"user","content":"x"}],"logprobs":true}""",
             """{"model":"m","messages":[{"role":"user","content":[{"type":"image_url"}]}]}""",
         ).forEach { body ->
@@ -123,6 +122,48 @@ class OpenAiRequestParserTest {
             }
             assertEquals(400, statusCode)
         }
+    }
+
+    @Test
+    fun parsesQwenToolCallIntoOpenAiResponseShapeOnlyForAdvertisedTools() {
+        val tools = """[{"type":"function","function":{"name":"lookup"}}]"""
+        val output = OpenAiToolCallParser.parse(
+            "Thinking first. <tool_call><function=lookup><parameter=key>\"value\"</parameter></function></tool_call>",
+            tools,
+        )
+
+        assertEquals("Thinking first.", output.content)
+        assertEquals(1, output.toolCalls.size)
+        assertEquals("lookup", output.toolCalls.single().name)
+        assertEquals("{\"key\":\"value\"}", output.toolCalls.single().arguments)
+        assertTrue(OpenAiToolCallParser.parse("<tool_call><function=other></function></tool_call>", tools).toolCalls.isEmpty())
+
+        val completion = OpenAiResponseWriter.completion(
+            "chatcmpl-test", "qwen3.5", output.content.orEmpty(), 10, 4,
+            com.nv.pair.mnn.MnnFinishReason.STOP, output.toolCalls,
+        )
+        val choice = completion.getJSONArray("choices").getJSONObject(0)
+        assertEquals("tool_calls", choice.getString("finish_reason"))
+        assertEquals("Thinking first.", choice.getJSONObject("message").getString("content"))
+        assertEquals("lookup", choice.getJSONObject("message").getJSONArray("tool_calls")
+            .getJSONObject(0).getJSONObject("function").getString("name"))
+    }
+
+    @Test
+    fun parsesToolsAndAssistantToolCallHistoryForCallerSideExecution() {
+        val request = OpenAiRequestParser.parse(
+            JSONObject(
+                """{"model":"qwen3.5","messages":[{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"key\":\"v\"}"}}]},{"role":"tool","tool_call_id":"call_1","name":"lookup","content":"result"},{"role":"user","content":"Continue"}],"tools":[{"type":"function","function":{"name":"lookup","description":"Lookup","parameters":{"type":"object","properties":{"key":{"type":"string"}}}}}],"tool_choice":"auto"}""",
+            ),
+        )
+
+        assertEquals(3, request.chat.messages.size)
+        assertEquals("json", request.chat.messages[0].nativeRole)
+        assertTrue(request.chat.messages[0].nativeJson?.contains("\"tool_calls\"") == true)
+        assertEquals("json", request.chat.messages[1].nativeRole)
+        assertTrue(request.chat.messages[1].nativeJson?.contains("\"tool_call_id\"") == true)
+        assertTrue(request.chat.toolsJson?.contains("\"lookup\"") == true)
+        assertEquals("auto", request.chat.toolChoice)
     }
 
     @Test

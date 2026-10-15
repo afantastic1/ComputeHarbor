@@ -27,9 +27,9 @@ class OpenAiRequestException(
 ) : Exception(message)
 
 object OpenAiRequestParser {
-    private val supportedFields = setOf("model", "messages", "stream", "stream_options", "max_tokens", "temperature", "top_p", "seed")
+    private val supportedFields = setOf("model", "messages", "stream", "stream_options", "max_tokens", "temperature", "top_p", "seed", "tools", "tool_choice")
     private val unsupportedFields = setOf(
-        "tools", "tool_choice", "functions", "function_call", "response_format", "logprobs", "top_logprobs",
+        "functions", "function_call", "response_format", "logprobs", "top_logprobs",
         "audio", "modalities", "n", "stop", "presence_penalty", "frequency_penalty", "logit_bias",
     )
 
@@ -58,7 +58,16 @@ object OpenAiRequestParser {
         val temperature = optionalNumber(body, "temperature", DEFAULT_TEMPERATURE).toFloat()
         val topP = optionalNumber(body, "top_p", DEFAULT_TOP_P).toFloat()
         val seed = if (body.has("seed")) optionalInteger(body, "seed", 0) else null
-        val chat = MnnChatRequest(modelId, messages, maxTokens, temperature, topP, seed)
+        if (body.has("tools") && body.opt("tools") !is JSONArray) {
+            throw badRequest("invalid_request_error", "'tools' must be an array.", "tools")
+        }
+        val tools = body.optJSONArray("tools")
+        if (tools != null) validateTools(tools)
+        val toolChoice = parseToolChoice(body.opt("tool_choice"), tools)
+        val chat = MnnChatRequest(
+            modelId, messages, maxTokens, temperature, topP, seed,
+            tools?.toString(), toolChoice,
+        )
         when (val validation = chat.validate()) {
             is com.nv.pair.mnn.MnnResult.Failure -> throw badRequest(
                 "invalid_request_error",
@@ -80,17 +89,74 @@ object OpenAiRequestParser {
             } catch (_: JSONException) {
                 throw badRequest("invalid_request_error", "Each message must be an object with role and content.", "messages[$index]")
             }
+            val roleName = requiredString(message, "role", "messages[$index].role")
+            val isToolHistory = roleName == "tool" || (roleName == "assistant" && message.has("tool_calls"))
             message.keys().forEach { key ->
-                if (key != "role" && key != "content") {
-                throw badRequest("unsupported_parameter", "The message '$key' field is not supported.", "messages[$index].$key")
+                val allowedToolFields = if (roleName == "assistant") setOf("tool_calls") else setOf("tool_call_id", "name")
+                if (key !in setOf("role", "content") && !(isToolHistory && key in allowedToolFields)) {
+                    throw badRequest("unsupported_parameter", "The message '$key' field is not supported.", "messages[$index].$key")
                 }
             }
-            val roleName = requiredString(message, "role", "messages[$index].role")
+            if (isToolHistory) {
+                if (roleName == "assistant") {
+                    val calls = message.optJSONArray("tool_calls")
+                    if (calls == null || calls.length() == 0) {
+                        throw badRequest("invalid_request_error", "Assistant tool_calls must be a non-empty array.", "messages[$index].tool_calls")
+                    }
+                    for (callIndex in 0 until calls.length()) {
+                        val call = calls.optJSONObject(callIndex)
+                        val function = call?.optJSONObject("function")
+                        if (call == null || call.optString("id").isBlank() ||
+                            call.optString("type") != "function" || function?.optString("name").isNullOrBlank() ||
+                            function?.opt("arguments") !is String) {
+                            throw badRequest("invalid_request_error", "Assistant tool call is malformed.", "messages[$index].tool_calls[$callIndex]")
+                        }
+                    }
+                }
+                if (roleName == "tool" && message.optString("tool_call_id").isBlank()) {
+                    throw badRequest("invalid_request_error", "Tool messages require tool_call_id.", "messages[$index].tool_call_id")
+                }
+                return@mapNotNull MnnChatMessage(MnnChatRole.ASSISTANT, "", message.toString())
+            }
             val role = MnnChatRole.entries.firstOrNull { it.wireName == roleName }
                 ?: throw badRequest("invalid_request_error", "Message role '$roleName' is not supported.", "messages[$index].role")
             val content = parseMessageContent(message.opt("content"), index, role == MnnChatRole.ASSISTANT)
             if (role == MnnChatRole.ASSISTANT && content.isBlank()) null else MnnChatMessage(role, content)
         }
+    }
+
+    private fun validateTools(tools: JSONArray) {
+        for (index in 0 until tools.length()) {
+            val tool = tools.optJSONObject(index)
+                ?: throw badRequest("invalid_request_error", "Each tool must be an object.", "tools[$index]")
+            val function = tool.optJSONObject("function")
+            if (tool.optString("type") != "function" || function == null || function.optString("name").isBlank()) {
+                throw badRequest("invalid_request_error", "Tools must use the function tool format.", "tools[$index]")
+            }
+            val parameters = function.opt("parameters")
+            if (parameters != null && parameters !is JSONObject) {
+                throw badRequest("invalid_request_error", "Function parameters must be an object.", "tools[$index].function.parameters")
+            }
+        }
+    }
+
+    private fun parseToolChoice(value: Any?, tools: JSONArray?): String? {
+        if (value == null) return null
+        if (tools == null && value == "none") return "none"
+        if (tools == null) throw badRequest("invalid_request_error", "tool_choice requires tools.", "tool_choice")
+        if (tools.length() == 0 && value != "none") {
+            throw badRequest("invalid_request_error", "tool_choice requires at least one function tool.", "tool_choice")
+        }
+        if (value is String && value in setOf("auto", "none", "required")) return value
+        if (value is JSONObject && value.optString("type") == "function" &&
+            value.optJSONObject("function")?.optString("name").orEmpty().isNotBlank()) {
+            val functionName = value.getJSONObject("function").getString("name")
+            val offered = (0 until tools.length()).any { index ->
+                tools.optJSONObject(index)?.optJSONObject("function")?.optString("name") == functionName
+            }
+            if (offered) return "function:$functionName"
+        }
+        throw badRequest("invalid_request_error", "tool_choice must be auto, none, required, or a function choice.", "tool_choice")
     }
 
     private fun parseMessageContent(value: Any?, messageIndex: Int, allowEmpty: Boolean): String {

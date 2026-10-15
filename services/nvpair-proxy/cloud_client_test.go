@@ -414,12 +414,17 @@ func TestCloudClientPreservesSSEAndRejectsTruncatedOrOversizedEvents(t *testing.
 		name         string
 		stream       string
 		wantBody     string
+		wantContains []string
 		maxEventSize int
 		wantError    string
 	}{
 		{
 			name: "done", stream: "data: {\"model\":\"upstream\",\"choices\":[]}\n\ndata: [DONE]\n\n",
 			wantBody: "data: {\"choices\":[],\"model\":\"cloud/p/model\"}\n\ndata: [DONE]\n\n", maxEventSize: 128,
+		},
+		{
+			name: "tool call deltas", stream: "data: {\"model\":\"upstream\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_weather\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\"}}]},\"finish_reason\":null}]}\n\ndata: {\"model\":\"upstream\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"Seattle\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n",
+			wantContains: []string{`"tool_calls"`, `"call_weather"`, `"get_weather"`, `"arguments":"{\"city\":"`, `"arguments":"Seattle\"}"`, `"finish_reason":"tool_calls"`, `"model":"cloud/p/model"`}, maxEventSize: 1024,
 		},
 		{name: "missing terminal event", stream: "data: {\"choices\":[]}\n\n", maxEventSize: 128, wantError: io.ErrUnexpectedEOF.Error()},
 		{name: "event size limit", stream: "data: " + strings.Repeat("x", 64) + "\n\n", maxEventSize: 24, wantError: "configured size limit"},
@@ -442,6 +447,17 @@ func TestCloudClientPreservesSSEAndRejectsTruncatedOrOversizedEvents(t *testing.
 			if test.wantError != "" {
 				if readErr == nil || !strings.Contains(readErr.Error(), test.wantError) {
 					t.Fatalf("read error=%v, want %v", readErr, test.wantError)
+				}
+				return
+			}
+			if len(test.wantContains) > 0 {
+				for _, value := range test.wantContains {
+					if !strings.Contains(string(body), value) {
+						t.Errorf("stream body=%q does not contain %q", body, value)
+					}
+				}
+				if readErr != nil {
+					t.Fatalf("reading tool-call stream: %v", readErr)
 				}
 				return
 			}

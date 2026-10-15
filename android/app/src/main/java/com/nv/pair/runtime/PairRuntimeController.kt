@@ -29,6 +29,7 @@ import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.io.IOException
 import java.util.UUID
+import org.json.JSONObject
 
 class PairRuntimeController(context: Context) {
     private val applicationContext = context.applicationContext
@@ -58,6 +59,31 @@ class PairRuntimeController(context: Context) {
             Intent(applicationContext, PairRuntimeService::class.java)
                 .setAction(PairRuntimeService.ACTION_CLOUD_POLICY_CHANGED)
                 .putExtra(PairRuntimeService.EXTRA_CLOUD_POLICY, policy),
+        )
+    }
+
+    fun saveCloudProvider(provider: JSONObject, credential: String) {
+        applicationContext.startService(
+            Intent(applicationContext, PairRuntimeService::class.java)
+                .setAction(PairRuntimeService.ACTION_CLOUD_PROVIDER_SAVE)
+                .putExtra(PairRuntimeService.EXTRA_CLOUD_PROVIDER_JSON, provider.toString())
+                .putExtra(PairRuntimeService.EXTRA_CLOUD_PROVIDER_CREDENTIAL, credential),
+        )
+    }
+
+    fun removeCloudProvider(providerId: String) {
+        applicationContext.startService(
+            Intent(applicationContext, PairRuntimeService::class.java)
+                .setAction(PairRuntimeService.ACTION_CLOUD_PROVIDER_REMOVE)
+                .putExtra(PairRuntimeService.EXTRA_CLOUD_PROVIDER_ID, providerId),
+        )
+    }
+
+    fun testCloudProvider(providerId: String) {
+        applicationContext.startService(
+            Intent(applicationContext, PairRuntimeService::class.java)
+                .setAction(PairRuntimeService.ACTION_CLOUD_PROVIDER_TEST)
+                .putExtra(PairRuntimeService.EXTRA_CLOUD_PROVIDER_ID, providerId),
         )
     }
 

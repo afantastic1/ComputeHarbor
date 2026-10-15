@@ -62,6 +62,24 @@ class MnnModelManager {
                     return MnnResult.Failure(error)
                 }
             }
+            val llmConfigFile = File(modelDirectory, config.optString("llm_config", "llm_config.json"))
+            val llmConfig = JSONObject(llmConfigFile.readText())
+            if (config.optBoolean("is_visual", llmConfig.optBoolean("is_visual", false))) {
+                val visualConfig = JSONObject(llmConfig.toString())
+                listOf("visual_model", "vision_weight").forEach { key ->
+                    if (config.has(key)) visualConfig.put(key, config.get(key))
+                }
+                val visualArtifacts = listOf(
+                    ConfigArtifact("visual_model", "visual.mnn", "visual model"),
+                    ConfigArtifact("vision_weight", "visual.mnn.weight", "visual model weights"),
+                )
+                for (artifact in visualArtifacts) {
+                    val error = validateArtifact(visualConfig, modelDirectory, artifact)
+                    if (error != null) {
+                        return MnnResult.Failure(error)
+                    }
+                }
+            }
         } catch (_: JSONException) {
             return MnnResult.failure(
                 MnnErrorCode.MODEL_CONFIG_INVALID,

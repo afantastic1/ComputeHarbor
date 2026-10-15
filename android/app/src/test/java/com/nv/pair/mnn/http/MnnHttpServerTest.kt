@@ -150,7 +150,7 @@ class MnnHttpServerTest {
     }
 
     @Test
-    fun streamsFirstTokenBeforeDoneAndRejectsUnsupportedCapabilities() {
+    fun streamsFirstTokenBeforeDoneAndAcceptsOpenAiToolSchemas() {
         val server = MnnHttpServer(FakeInferenceService(), TEST_PORT)
         server.start()
         try {
@@ -173,14 +173,39 @@ class MnnHttpServerTest {
             assertTrue(usageStream.contains("\"prompt_tokens\":0"))
             assertTrue(usageStream.contains("\"completion_tokens\":2"))
 
-            val unsupported = http(
+            val toolsRequest = http(
                 server.localPort,
                 "POST",
                 "/v1/chat/completions",
-                """{"model":"qwen3-0.6b","messages":[{"role":"user","content":"x"}],"tools":[]}""",
+                """{"model":"qwen3-0.6b","messages":[{"role":"user","content":"x"}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],"tool_choice":"auto"}""",
             )
-            assertTrue("unsupported tools response: $unsupported", unsupported.startsWith("HTTP/1.1 400"))
-            assertTrue("unsupported tools response: $unsupported", unsupported.contains("\"code\":\"unsupported_parameter\""))
+            assertTrue("tool schema response: $toolsRequest", toolsRequest.startsWith("HTTP/1.1 200"))
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
+    fun returnsCallerExecutableToolCallsForStreamingAndNonStreamingRequests() {
+        val generatedCall = "<tool_call><function=lookup><parameter=key>value</parameter></function></tool_call>"
+        val server = MnnHttpServer(FakeInferenceService(generatedChunks = listOf(generatedCall)), TEST_PORT)
+        server.start()
+        try {
+            val body = """{"model":"qwen3-0.6b","messages":[{"role":"user","content":"lookup"}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object","properties":{"key":{"type":"string"}}}}}]}"""
+            val completion = http(server.localPort, "POST", "/v1/chat/completions", body)
+            assertTrue(completion.contains("\"finish_reason\":\"tool_calls\""))
+            assertTrue(completion.contains("\"name\":\"lookup\""))
+            assertTrue(completion.contains("\"arguments\":\"{\\\"key\\\":\\\"value\\\"}\""))
+
+            val streamed = http(
+                server.localPort,
+                "POST",
+                "/v1/chat/completions",
+                body.dropLast(1) + ",\"stream\":true}",
+            )
+            assertTrue(streamed.contains("\"tool_calls\":"))
+            assertTrue(streamed.contains("\"finish_reason\":\"tool_calls\""))
+            assertTrue(streamed.contains("data: [DONE]"))
         } finally {
             server.close()
         }
@@ -484,6 +509,7 @@ class MnnHttpServerTest {
         private val supportsOpenCl: Boolean = true,
         private val generationError: MnnErrorCode? = null,
         private val generationFinishReason: MnnFinishReason = MnnFinishReason.STOP,
+        private val generatedChunks: List<String> = listOf("Hello", " world"),
     ) : MnnInferenceService {
         private val model = MnnModelDescriptor("qwen3-0.6b", "/models/qwen3-0.6b/config.json")
         val firstToken = CountDownLatch(1)
@@ -536,11 +562,14 @@ class MnnHttpServerTest {
                 generationsStarted.countDown()
                 releaseGeneration.await(30, TimeUnit.SECONDS)
             }
-            onToken("Hello")
-            firstToken.countDown()
-            if (blockAfterFirstToken) releaseGeneration.await(5, TimeUnit.SECONDS)
-            onToken(" world")
-            return MnnResult.success(MnnGenerationResult("Hello world", MnnRuntimeMetrics(generatedTokens = 2), generationFinishReason))
+            generatedChunks.forEachIndexed { index, chunk ->
+                onToken(chunk)
+                if (index == 0) {
+                    firstToken.countDown()
+                    if (blockAfterFirstToken) releaseGeneration.await(5, TimeUnit.SECONDS)
+                }
+            }
+            return MnnResult.success(MnnGenerationResult(generatedChunks.joinToString(""), MnnRuntimeMetrics(generatedTokens = generatedChunks.size), generationFinishReason))
         }
 
         override fun cancel(requestId: Long) {

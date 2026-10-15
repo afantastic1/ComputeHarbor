@@ -7,6 +7,16 @@ SPDX-License-Identifier: Apache-2.0
 
 The Android app hosts the PAIR services and the optional MNN model runtime. Model weights are supplied locally for testing; they are not stored in this repository or packaged in the APK.
 
+## Android UI
+
+The Home screen puts runtime Start/Stop first, then shows the phone-only unified API and the local MNN runtime. The API card uses the loopback gateway at `http://127.0.0.1:14326/v1`; this address is intended for clients running on the phone. The MNN card reports runtime health only and does not claim that a model is loaded or generating. Service facade health is available under Settings diagnostics and is not inference activity.
+
+Connected node activity is attributed using the stable discovered node UUID and workload `scheduledOn` field. A model in `loadedByEngine` is labeled Loaded; only a workload with state `running` is labeled Active Inference. Cluster pairing actions use invite-scoped dialogs and continue to call the existing invite/respond/cancel commands. Closing a dialog does not cancel a remote invite.
+
+The Models screen separates installed on-device MNN models, catalog browsing/install, and models exposed through the PAIR network. Tool Calling is shown as Not verified where the current Android UI has no capability evidence. Settings only exposes values available from Android/runtime state; hardware resource values and LAN endpoints are not inferred from the design reference.
+
+See [`ComputeHarbor_Android_UI_Kit/CURRENT_UI_AUDIT.md`](../docs/ComputeHarbor_Android_UI_Kit/CURRENT_UI_AUDIT.md) for the baseline SHA and the UI state-source audit. UI screenshots and device acceptance remain pending when an Android SDK/device is unavailable.
+
 On Android/arm64, the broker packages engine-manager in hosted mode and the
 MNN proxy facade listens on `:14324` while the app-owned engine remains on
 loopback `:14325`. Discovery advertises service key `mn` only while both
@@ -40,9 +50,11 @@ The OpenCL probe initializes the MNN runtime without loading a model. An
 `AVAILABLE` result only means that the runtime initialized; model compatibility
 is determined when a model loads and generates. Probe results are not persisted
 and are refreshed when the runtime starts or when the user requests a reprobe.
-The CPU APK reports OpenCL as not compiled. OpenCL builds remain opt-in with
-`-PpairMnnOpenCL=true` and request optional access to the public system library
-`libOpenCL.so`; this does not bypass Android vendor library access rules.
+The default APK compiles and packages OpenCL support. Devices without a usable
+OpenCL runtime continue to use CPU; build a CPU-only APK with
+`-PpairMnnOpenCL=false`. OpenCL builds request optional access to the public
+system library `libOpenCL.so`; this does not bypass Android vendor library
+access rules.
 
 The broker currently advertises the local MNN engine from overall runtime
 health, not from model-level readiness or the effective OpenCL capability. Do
